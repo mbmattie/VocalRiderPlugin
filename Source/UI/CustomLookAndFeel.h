@@ -1,0 +1,112 @@
+/*
+  ==============================================================================
+
+    CustomLookAndFeel.h
+    Created: 2026
+    Author:  MBM Audio
+
+    Dark, high-contrast design with glowing accents.
+    Inspired by D5.0, Retrograde, and X-Rider aesthetics.
+
+  ==============================================================================
+*/
+
+#pragma once
+
+#include <juce_gui_basics/juce_gui_basics.h>
+
+class CustomLookAndFeel : public juce::LookAndFeel_V4
+{
+public:
+    CustomLookAndFeel();
+    ~CustomLookAndFeel() override = default;
+
+    void drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
+                          float sliderPosProportional, float rotaryStartAngle,
+                          float rotaryEndAngle, juce::Slider& slider) override;
+
+    // Large featured knob (for Target)
+    static void drawLargeKnob(juce::Graphics& g, juce::Rectangle<float> bounds,
+                               float sliderPosProportional, float rotaryStartAngle,
+                               float rotaryEndAngle, juce::Colour accentColour);
+
+    void drawLabel(juce::Graphics& g, juce::Label& label) override;
+    juce::Font getLabelFont(juce::Label& label) override;
+
+    void drawButtonBackground(juce::Graphics& g, juce::Button& button,
+                              const juce::Colour& backgroundColour,
+                              bool shouldDrawButtonAsHighlighted,
+                              bool shouldDrawButtonAsDown) override;
+
+    void drawComboBox(juce::Graphics& g, int width, int height, bool isButtonDown,
+                      int buttonX, int buttonY, int buttonW, int buttonH,
+                      juce::ComboBox& box) override;
+
+    void drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
+                          bool shouldDrawButtonAsHighlighted,
+                          bool shouldDrawButtonAsDown) override;
+
+    //==========================================================================
+    // Dark High-Contrast Color Palette
+    
+    // Base colors - very dark with high contrast
+    static juce::Colour getBackgroundColour()      { return juce::Colour(0xFF16181C); }  // Near black
+    static juce::Colour getSurfaceColour()         { return juce::Colour(0xFF1E2026); }  // Dark surface
+    static juce::Colour getSurfaceLightColour()    { return juce::Colour(0xFF2A2D35); }  // Highlight
+    static juce::Colour getSurfaceDarkColour()     { return juce::Colour(0xFF0D0E11); }  // Deep shadow
+    static juce::Colour getBorderColour()          { return juce::Colour(0xFF2E3138); }  // Subtle border
+    
+    // Accent colors - glowing, vibrant
+    static juce::Colour getAccentColour()          { return juce::Colour(0xFFB48EFF); }  // Purple glow
+    static juce::Colour getAccentBrightColour()    { return juce::Colour(0xFFD4B8FF); }  // Bright purple
+    static juce::Colour getAccentDimColour()       { return juce::Colour(0xFF7B5CAD); }  // Dim purple
+    
+    // Secondary accent (cyan for contrast)
+    static juce::Colour getSecondaryAccentColour() { return juce::Colour(0xFF5BC4D4); }  // Cyan
+    
+    // Text colors with clear hierarchy
+    static juce::Colour getTextColour()            { return juce::Colour(0xFFE8EAF0); }  // Bright white
+    static juce::Colour getDimTextColour()         { return juce::Colour(0xFF8890A0); }  // Medium gray
+    static juce::Colour getVeryDimTextColour()     { return juce::Colour(0xFF4A5060); }  // Dark gray
+    
+    // Waveform and visualization colors
+    static juce::Colour getWaveformColour()        { return juce::Colour(0xFF5BC4D4); }  // Cyan
+    static juce::Colour getWaveformDimColour()     { return juce::Colour(0xFF2A5560); }  // Dim cyan
+    static juce::Colour getGainCurveColour()       { return juce::Colour(0xFF5BC4D4); }  // Cyan curve
+    static juce::Colour getGainBoostColour()       { return juce::Colour(0xFF5BD49A); }  // Green
+    static juce::Colour getGainCutColour()         { return juce::Colour(0xFFD45B8A); }  // Pink/red
+    static juce::Colour getTargetLineColour()      { return juce::Colour(0xFFE8C547); }  // Yellow/gold
+    static juce::Colour getRangeLineColour()       { return juce::Colour(0xFFB48EFF); }  // Purple
+    
+    // Status colors
+    static juce::Colour getWarningColour()         { return juce::Colour(0xFFE87B7B); }
+    static juce::Colour getSuccessColour()         { return juce::Colour(0xFF7BE8A8); }
+    
+    //==========================================================================
+    // Drawing helpers
+    
+    static void drawNeumorphicInset(juce::Graphics& g, juce::Rectangle<float> bounds, 
+                                     float cornerRadius = 8.0f, float depth = 4.0f);
+    
+    static void drawNeumorphicRaised(juce::Graphics& g, juce::Rectangle<float> bounds,
+                                      float cornerRadius = 8.0f, float depth = 4.0f);
+    
+    static void drawSoftPanel(juce::Graphics& g, juce::Rectangle<float> bounds, 
+                               float cornerRadius = 8.0f);
+    
+    // Grainy texture overlay
+    static void drawGrainTexture(juce::Graphics& g, juce::Rectangle<int> bounds, float opacity = 0.03f);
+    
+    // Glowing arc for knobs
+    static void drawGlowingArc(juce::Graphics& g, float centreX, float centreY, float radius,
+                                float startAngle, float endAngle, float thickness,
+                                juce::Colour colour, float glowRadius = 8.0f);
+    
+    // Legacy compatibility
+    static juce::Colour getPanelColour() { return getSurfaceColour(); }
+    static void drawPanel(juce::Graphics& g, juce::Rectangle<float> bounds, float cornerRadius = 6.0f);
+    static void drawPanelWithBorder(juce::Graphics& g, juce::Rectangle<float> bounds, float cornerRadius = 6.0f);
+
+private:
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(CustomLookAndFeel)
+};
