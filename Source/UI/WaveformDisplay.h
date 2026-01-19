@@ -117,12 +117,11 @@ private:
     
     // Areas
     juce::Rectangle<float> waveformArea;
-    juce::Rectangle<float> handleArea;
-    static constexpr int handleAreaWidth = 70;
-    static constexpr int ioMeterWidth = 20;
+    static constexpr int handleAreaWidth = 0;   // No left panel, but target/range lines are still draggable
+    static constexpr int ioMeterWidth = 55;     // Wider meters on right with dB scale
     
-    // Downsampling
-    float samplesPerPixel = 128.0f;
+    // Downsampling - lower value = higher resolution/fidelity
+    float samplesPerPixel = 64.0f;
     int sampleCounter = 0;
     float currentInputMax = 0.0f;
     float currentOutputMax = 0.0f;
@@ -137,6 +136,13 @@ private:
     // I/O levels
     std::atomic<float> inputLevelDb { -100.0f };
     std::atomic<float> outputLevelDb { -100.0f };
+    
+    // Peak hold for meter display
+    float inputPeakHoldDb = -100.0f;
+    float outputPeakHoldDb = -100.0f;
+    int inputPeakHoldCounter = 0;
+    int outputPeakHoldCounter = 0;
+    static constexpr int peakHoldFrames = 60;  // ~1 second at 60fps
 
     // Drag state
     DragTarget currentDragTarget = DragTarget::None;

@@ -25,13 +25,21 @@ public:
                           float sliderPosProportional, float rotaryStartAngle,
                           float rotaryEndAngle, juce::Slider& slider) override;
 
-    // Large featured knob (for Target)
+    // Large featured knob (for Target) with hover support
     static void drawLargeKnob(juce::Graphics& g, juce::Rectangle<float> bounds,
                                float sliderPosProportional, float rotaryStartAngle,
-                               float rotaryEndAngle, juce::Colour accentColour);
+                               float rotaryEndAngle, juce::Colour accentColour,
+                               bool isHovered = false);
 
     void drawLabel(juce::Graphics& g, juce::Label& label) override;
     juce::Font getLabelFont(juce::Label& label) override;
+    
+    // Plugin-wide font
+    static juce::String getFontName() { return "Space Grotesk"; }
+    static juce::Font getPluginFont(float size, bool bold = false) 
+    { 
+        return juce::Font(juce::FontOptions(getFontName(), size, bold ? juce::Font::bold : juce::Font::plain));
+    }
 
     void drawButtonBackground(juce::Graphics& g, juce::Button& button,
                               const juce::Colour& backgroundColour,
@@ -73,8 +81,8 @@ public:
     static juce::Colour getWaveformColour()        { return juce::Colour(0xFF5BC4D4); }  // Cyan
     static juce::Colour getWaveformDimColour()     { return juce::Colour(0xFF2A5560); }  // Dim cyan
     static juce::Colour getGainCurveColour()       { return juce::Colour(0xFF5BC4D4); }  // Cyan curve
-    static juce::Colour getGainBoostColour()       { return juce::Colour(0xFF5BD49A); }  // Green
-    static juce::Colour getGainCutColour()         { return juce::Colour(0xFFD45B8A); }  // Pink/red
+    static juce::Colour getGainBoostColour()       { return juce::Colour(0xFF5BCFEF); }  // Bright cyan (boost)
+    static juce::Colour getGainCutColour()         { return juce::Colour(0xFF6B7AAD); }  // Blue-grey/purple (cut)
     static juce::Colour getTargetLineColour()      { return juce::Colour(0xFFE8C547); }  // Yellow/gold
     static juce::Colour getRangeLineColour()       { return juce::Colour(0xFFB48EFF); }  // Purple
     

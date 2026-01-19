@@ -26,7 +26,7 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     // Header
     
     titleLabel.setText("VOCAL RIDER", juce::dontSendNotification);
-    titleLabel.setFont(juce::Font(juce::FontOptions(14.0f, juce::Font::bold)));
+    titleLabel.setFont(CustomLookAndFeel::getPluginFont(14.0f, true));
     titleLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getAccentColour());
     titleLabel.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(titleLabel);
@@ -49,23 +49,19 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     advancedButton.onClick = [this] { toggleAdvancedPanel(); };
     addAndMakeVisible(advancedButton);
     
-    // Resize button (cycles through sizes)
-    resizeButton.onClick = [this] {
-        // Cycle through sizes: Small -> Medium -> Large -> Small
-        switch (currentWindowSize)
+    // Bottom bar with resize button
+    addAndMakeVisible(bottomBar);
+    
+    // Resize button - shows popup menu with size options
+    resizeButton.onSizeSelected = [this](int sizeIndex) {
+        switch (sizeIndex)
         {
-            case WindowSize::Small:
-                setWindowSize(WindowSize::Medium);
-                break;
-            case WindowSize::Medium:
-                setWindowSize(WindowSize::Large);
-                break;
-            case WindowSize::Large:
-                setWindowSize(WindowSize::Small);
-                break;
+            case 0: setWindowSize(WindowSize::Small); break;
+            case 1: setWindowSize(WindowSize::Medium); break;
+            case 2: setWindowSize(WindowSize::Large); break;
         }
     };
-    addAndMakeVisible(resizeButton);
+    bottomBar.addAndMakeVisible(resizeButton);
 
     //==============================================================================
     // Waveform display
@@ -88,46 +84,76 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     
     addAndMakeVisible(controlPanel);
     
+    // Animated tooltip (added to be on top)
+    addAndMakeVisible(valueTooltip);
+    
+    // Helper to setup slider with custom tooltip
+    auto setupSliderWithTooltip = [this](juce::Slider& slider, const juce::String& suffix) {
+        slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+        slider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+        slider.setTextValueSuffix(suffix);
+        slider.setPopupDisplayEnabled(false, false, nullptr);  // Disable built-in popup
+        addAndMakeVisible(slider);
+    };
+    
     // Target knob (LARGE, center)
-    targetSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    targetSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 16);
-    targetSlider.setTextValueSuffix(" dB");
-    addAndMakeVisible(targetSlider);
+    setupSliderWithTooltip(targetSlider, " dB");
+    targetSlider.onValueChange = [this]() {
+        if (targetSlider.isMouseOverOrDragging())
+            valueTooltip.showValue("TARGET", juce::String(targetSlider.getValue(), 1) + " dB", &targetSlider);
+    };
+    targetSlider.onMouseEnter = [this]() {
+        valueTooltip.showValue("TARGET", juce::String(targetSlider.getValue(), 1) + " dB", &targetSlider);
+    };
+    targetSlider.onMouseExit = [this]() {
+        valueTooltip.hideTooltip();
+    };
     
     targetLabel.setText("TARGET", juce::dontSendNotification);
-    targetLabel.setFont(juce::Font(juce::FontOptions(10.0f, juce::Font::bold)));
-    targetLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getTargetLineColour());
+    targetLabel.setFont(CustomLookAndFeel::getPluginFont(10.0f, true));
+    targetLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getTextColour());
     targetLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(targetLabel);
     
     // Range knob
-    rangeSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    rangeSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 14);
-    rangeSlider.setTextValueSuffix(" dB");
-    addAndMakeVisible(rangeSlider);
+    setupSliderWithTooltip(rangeSlider, " dB");
+    rangeSlider.onValueChange = [this]() {
+        if (rangeSlider.isMouseOverOrDragging())
+            valueTooltip.showValue("RANGE", juce::String(rangeSlider.getValue(), 1) + " dB", &rangeSlider);
+    };
+    rangeSlider.onMouseEnter = [this]() {
+        valueTooltip.showValue("RANGE", juce::String(rangeSlider.getValue(), 1) + " dB", &rangeSlider);
+    };
+    rangeSlider.onMouseExit = [this]() {
+        valueTooltip.hideTooltip();
+    };
     
     rangeLabel.setText("RANGE", juce::dontSendNotification);
-    rangeLabel.setFont(juce::Font(juce::FontOptions(9.0f, juce::Font::bold)));
-    rangeLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getRangeLineColour());
+    rangeLabel.setFont(CustomLookAndFeel::getPluginFont(9.0f, true));
+    rangeLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getTextColour());
     rangeLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(rangeLabel);
     
     // Speed knob
-    speedSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    speedSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 14);
-    speedSlider.setTextValueSuffix("%");
-    addAndMakeVisible(speedSlider);
-    
-    speedLabel.setText("SPEED", juce::dontSendNotification);
-    speedLabel.setFont(juce::Font(juce::FontOptions(9.0f, juce::Font::bold)));
-    speedLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getDimTextColour());
-    speedLabel.setJustificationType(juce::Justification::centred);
-    addAndMakeVisible(speedLabel);
-    
+    setupSliderWithTooltip(speedSlider, "%");
     speedSlider.onValueChange = [this] {
         audioProcessor.updateAttackReleaseFromSpeed(static_cast<float>(speedSlider.getValue()));
         if (advancedPanelVisible) updateAdvancedControls();
+        if (speedSlider.isMouseOverOrDragging())
+            valueTooltip.showValue("SPEED", juce::String(static_cast<int>(speedSlider.getValue())) + "%", &speedSlider);
     };
+    speedSlider.onMouseEnter = [this]() {
+        valueTooltip.showValue("SPEED", juce::String(static_cast<int>(speedSlider.getValue())) + "%", &speedSlider);
+    };
+    speedSlider.onMouseExit = [this]() {
+        valueTooltip.hideTooltip();
+    };
+    
+    speedLabel.setText("SPEED", juce::dontSendNotification);
+    speedLabel.setFont(CustomLookAndFeel::getPluginFont(9.0f, true));
+    speedLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getTextColour());
+    speedLabel.setJustificationType(juce::Justification::centred);
+    addAndMakeVisible(speedLabel);
     
     // Natural toggle
     naturalToggle.setColour(juce::ToggleButton::textColourId, CustomLookAndFeel::getTextColour());
@@ -145,9 +171,45 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
         audioProcessor.getApvts(), VocalRiderAudioProcessor::speedParamId, speedSlider);
 
     //==============================================================================
-    // Advanced Panel
+    // Advanced Panel with fade animation
     
     advancedPanel.setVisible(false);
+    advancedPanel.onAnimationUpdate = [this] {
+        // Update child component opacity during fade animation
+        float alpha = advancedPanel.getCurrentOpacity();
+        lookAheadComboBox.setAlpha(alpha);
+        detectionModeComboBox.setAlpha(alpha);
+        attackSlider.setAlpha(alpha);
+        releaseSlider.setAlpha(alpha);
+        holdSlider.setAlpha(alpha);
+        breathReductionSlider.setAlpha(alpha);
+        transientPreservationSlider.setAlpha(alpha);
+        attackLabel.setAlpha(alpha);
+        releaseLabel.setAlpha(alpha);
+        holdLabel.setAlpha(alpha);
+        breathLabel.setAlpha(alpha);
+        transientLabel.setAlpha(alpha);
+        
+        // Hide components when fully faded out
+        if (advancedPanel.isFullyHidden() && !advancedPanelVisible)
+        {
+            advancedPanel.setVisible(false);
+            lookAheadComboBox.setVisible(false);
+            detectionModeComboBox.setVisible(false);
+            attackSlider.setVisible(false);
+            releaseSlider.setVisible(false);
+            holdSlider.setVisible(false);
+            breathReductionSlider.setVisible(false);
+            transientPreservationSlider.setVisible(false);
+            attackLabel.setVisible(false);
+            releaseLabel.setVisible(false);
+            holdLabel.setVisible(false);
+            breathLabel.setVisible(false);
+            transientLabel.setVisible(false);
+        }
+        
+        repaint();
+    };
     addAndMakeVisible(advancedPanel);
     
     lookAheadComboBox.addItem("Look-Ahead: Off", 1);
@@ -170,56 +232,85 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     addAndMakeVisible(detectionModeComboBox);
     detectionModeComboBox.setVisible(false);
     
-    automationModeComboBox.addItem("Auto: Read", 1);
-    automationModeComboBox.addItem("Auto: Touch", 2);
-    automationModeComboBox.addItem("Auto: Latch", 3);
-    automationModeComboBox.addItem("Auto: Write", 4);
-    automationModeComboBox.setSelectedId(1);
-    automationModeComboBox.onChange = [this] {
-        audioProcessor.setAutomationMode(
-            static_cast<VocalRiderAudioProcessor::AutomationMode>(automationModeComboBox.getSelectedId() - 1));
-    };
-    addAndMakeVisible(automationModeComboBox);
-    automationModeComboBox.setVisible(false);
-    
-    auto setupAdvSlider = [this](juce::Slider& slider, double min, double max, const juce::String& suffix) {
+    auto setupAdvSlider = [this](TooltipSlider& slider, double min, double max, const juce::String& suffix) {
         slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-        slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 40, 12);
+        slider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);  // Hide text, use custom tooltip
         slider.setRange(min, max, 1.0);
         slider.setTextValueSuffix(suffix);
+        slider.setPopupDisplayEnabled(false, false, nullptr);  // Disable built-in popup
         addAndMakeVisible(slider);
         slider.setVisible(false);
     };
     
     auto setupAdvLabel = [this](juce::Label& label, const juce::String& text) {
         label.setText(text, juce::dontSendNotification);
-        label.setFont(juce::Font(juce::FontOptions(8.0f)));
-        label.setColour(juce::Label::textColourId, CustomLookAndFeel::getVeryDimTextColour());
+        label.setFont(CustomLookAndFeel::getPluginFont(8.0f, true));
+        label.setColour(juce::Label::textColourId, CustomLookAndFeel::getTextColour());  // White
         label.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(label);
         label.setVisible(false);
     };
     
     setupAdvSlider(attackSlider, 1.0, 500.0, "ms");
-    attackSlider.onValueChange = [this] { audioProcessor.setAttackMs(static_cast<float>(attackSlider.getValue())); };
+    attackSlider.onValueChange = [this] {
+        audioProcessor.setAttackMs(static_cast<float>(attackSlider.getValue()));
+        if (attackSlider.isMouseOverOrDragging())
+            valueTooltip.showValue("ATTACK", juce::String(static_cast<int>(attackSlider.getValue())) + " ms", &attackSlider);
+    };
+    attackSlider.onMouseEnter = [this]() {
+        valueTooltip.showValue("ATTACK", juce::String(static_cast<int>(attackSlider.getValue())) + " ms", &attackSlider);
+    };
+    attackSlider.onMouseExit = [this]() { valueTooltip.hideTooltip(); };
     
     setupAdvSlider(releaseSlider, 10.0, 2000.0, "ms");
-    releaseSlider.onValueChange = [this] { audioProcessor.setReleaseMs(static_cast<float>(releaseSlider.getValue())); };
+    releaseSlider.onValueChange = [this] {
+        audioProcessor.setReleaseMs(static_cast<float>(releaseSlider.getValue()));
+        if (releaseSlider.isMouseOverOrDragging())
+            valueTooltip.showValue("RELEASE", juce::String(static_cast<int>(releaseSlider.getValue())) + " ms", &releaseSlider);
+    };
+    releaseSlider.onMouseEnter = [this]() {
+        valueTooltip.showValue("RELEASE", juce::String(static_cast<int>(releaseSlider.getValue())) + " ms", &releaseSlider);
+    };
+    releaseSlider.onMouseExit = [this]() { valueTooltip.hideTooltip(); };
     
     setupAdvSlider(holdSlider, 0.0, 500.0, "ms");
-    holdSlider.onValueChange = [this] { audioProcessor.setHoldMs(static_cast<float>(holdSlider.getValue())); };
+    holdSlider.onValueChange = [this] {
+        audioProcessor.setHoldMs(static_cast<float>(holdSlider.getValue()));
+        if (holdSlider.isMouseOverOrDragging())
+            valueTooltip.showValue("HOLD", juce::String(static_cast<int>(holdSlider.getValue())) + " ms", &holdSlider);
+    };
+    holdSlider.onMouseEnter = [this]() {
+        valueTooltip.showValue("HOLD", juce::String(static_cast<int>(holdSlider.getValue())) + " ms", &holdSlider);
+    };
+    holdSlider.onMouseExit = [this]() { valueTooltip.hideTooltip(); };
     
     setupAdvSlider(breathReductionSlider, 0.0, 12.0, "dB");
-    breathReductionSlider.onValueChange = [this] { audioProcessor.setBreathReduction(static_cast<float>(breathReductionSlider.getValue())); };
+    breathReductionSlider.onValueChange = [this] {
+        audioProcessor.setBreathReduction(static_cast<float>(breathReductionSlider.getValue()));
+        if (breathReductionSlider.isMouseOverOrDragging())
+            valueTooltip.showValue("BREATH", juce::String(breathReductionSlider.getValue(), 1) + " dB", &breathReductionSlider);
+    };
+    breathReductionSlider.onMouseEnter = [this]() {
+        valueTooltip.showValue("BREATH", juce::String(breathReductionSlider.getValue(), 1) + " dB", &breathReductionSlider);
+    };
+    breathReductionSlider.onMouseExit = [this]() { valueTooltip.hideTooltip(); };
     
     setupAdvSlider(transientPreservationSlider, 0.0, 100.0, "%");
-    transientPreservationSlider.onValueChange = [this] { audioProcessor.setTransientPreservation(static_cast<float>(transientPreservationSlider.getValue()) / 100.0f); };
+    transientPreservationSlider.onValueChange = [this] {
+        audioProcessor.setTransientPreservation(static_cast<float>(transientPreservationSlider.getValue()) / 100.0f);
+        if (transientPreservationSlider.isMouseOverOrDragging())
+            valueTooltip.showValue("TRANSIENT", juce::String(static_cast<int>(transientPreservationSlider.getValue())) + "%", &transientPreservationSlider);
+    };
+    transientPreservationSlider.onMouseEnter = [this]() {
+        valueTooltip.showValue("TRANSIENT", juce::String(static_cast<int>(transientPreservationSlider.getValue())) + "%", &transientPreservationSlider);
+    };
+    transientPreservationSlider.onMouseExit = [this]() { valueTooltip.hideTooltip(); };
     
-    setupAdvLabel(attackLabel, "ATK");
-    setupAdvLabel(releaseLabel, "REL");
+    setupAdvLabel(attackLabel, "ATTACK");
+    setupAdvLabel(releaseLabel, "RELEASE");
     setupAdvLabel(holdLabel, "HOLD");
-    setupAdvLabel(breathLabel, "BREATH");
-    setupAdvLabel(transientLabel, "TRANS");
+    setupAdvLabel(breathLabel, "BREATH REDUCTION");
+    setupAdvLabel(transientLabel, "TRANSIENT PRESERVE");
 
     //==============================================================================
     #if JucePlugin_Build_Standalone
@@ -238,7 +329,7 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     addAndMakeVisible(rewindButton);
 
     fileNameLabel.setText("Load an audio file", juce::dontSendNotification);
-    fileNameLabel.setFont(juce::Font(juce::FontOptions(10.0f)));
+    fileNameLabel.setFont(CustomLookAndFeel::getPluginFont(10.0f));
     fileNameLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getDimTextColour());
     fileNameLabel.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(fileNameLabel);
@@ -268,27 +359,44 @@ void VocalRiderAudioProcessorEditor::updateAdvancedControls()
     detectionModeComboBox.setSelectedId(audioProcessor.getUseLufs() ? 2 : 1, juce::dontSendNotification);
     breathReductionSlider.setValue(audioProcessor.getBreathReduction(), juce::dontSendNotification);
     transientPreservationSlider.setValue(audioProcessor.getTransientPreservation() * 100.0f, juce::dontSendNotification);
-    automationModeComboBox.setSelectedId(static_cast<int>(audioProcessor.getAutomationMode()) + 1, juce::dontSendNotification);
 }
 
 void VocalRiderAudioProcessorEditor::toggleAdvancedPanel()
 {
     advancedPanelVisible = advancedButton.getToggleState();
     
-    advancedPanel.setVisible(advancedPanelVisible);
-    lookAheadComboBox.setVisible(advancedPanelVisible);
-    detectionModeComboBox.setVisible(advancedPanelVisible);
-    automationModeComboBox.setVisible(advancedPanelVisible);
-    attackSlider.setVisible(advancedPanelVisible);
-    releaseSlider.setVisible(advancedPanelVisible);
-    holdSlider.setVisible(advancedPanelVisible);
-    breathReductionSlider.setVisible(advancedPanelVisible);
-    transientPreservationSlider.setVisible(advancedPanelVisible);
-    attackLabel.setVisible(advancedPanelVisible);
-    releaseLabel.setVisible(advancedPanelVisible);
-    holdLabel.setVisible(advancedPanelVisible);
-    breathLabel.setVisible(advancedPanelVisible);
-    transientLabel.setVisible(advancedPanelVisible);
+    // Fade animation - set target opacity
+    advancedPanel.setTargetOpacity(advancedPanelVisible ? 1.0f : 0.0f);
+    
+    // Always show panel and children during animation (visibility controlled by opacity)
+    advancedPanel.setVisible(true);
+    lookAheadComboBox.setVisible(true);
+    detectionModeComboBox.setVisible(true);
+    attackSlider.setVisible(true);
+    releaseSlider.setVisible(true);
+    holdSlider.setVisible(true);
+    breathReductionSlider.setVisible(true);
+    transientPreservationSlider.setVisible(true);
+    attackLabel.setVisible(true);
+    releaseLabel.setVisible(true);
+    holdLabel.setVisible(true);
+    breathLabel.setVisible(true);
+    transientLabel.setVisible(true);
+    
+    // Set child component opacity via alpha
+    float alpha = advancedPanel.getCurrentOpacity();
+    lookAheadComboBox.setAlpha(alpha);
+    detectionModeComboBox.setAlpha(alpha);
+    attackSlider.setAlpha(alpha);
+    releaseSlider.setAlpha(alpha);
+    holdSlider.setAlpha(alpha);
+    breathReductionSlider.setAlpha(alpha);
+    transientPreservationSlider.setAlpha(alpha);
+    attackLabel.setAlpha(alpha);
+    releaseLabel.setAlpha(alpha);
+    holdLabel.setAlpha(alpha);
+    breathLabel.setAlpha(alpha);
+    transientLabel.setAlpha(alpha);
     
     if (advancedPanelVisible) updateAdvancedControls();
     
@@ -310,14 +418,17 @@ void VocalRiderAudioProcessorEditor::setWindowSize(WindowSize size)
         case WindowSize::Small:
             width = smallWidth;
             height = smallHeight;
+            resizeButton.currentSize = 0;
             break;
         case WindowSize::Medium:
             width = mediumWidth;
             height = mediumHeight;
+            resizeButton.currentSize = 1;
             break;
         case WindowSize::Large:
             width = largeWidth;
             height = largeHeight;
+            resizeButton.currentSize = 2;
             break;
     }
     
@@ -389,7 +500,7 @@ void VocalRiderAudioProcessorEditor::paint(juce::Graphics& g)
     g.setGradientFill(radialGradient);
     g.fillAll();
     
-    CustomLookAndFeel::drawGrainTexture(g, getLocalBounds(), 0.012f);
+    // Grain texture removed for cleaner look
     
     // Control panel floating tab
     auto panelBounds = controlPanel.getBounds().toFloat();
@@ -411,6 +522,15 @@ void VocalRiderAudioProcessorEditor::paint(juce::Graphics& g)
     g.fillRoundedRectangle(panelBounds.getX() + 30.0f, panelBounds.getY() - 12.0f, 
                             panelBounds.getWidth() - 60.0f, 2.0f, 1.0f);
     
+    // Bottom bar background
+    auto bottomBounds = bottomBar.getBounds().toFloat();
+    g.setColour(CustomLookAndFeel::getSurfaceDarkColour());
+    g.fillRect(bottomBounds);
+    
+    // Bottom bar top edge line
+    g.setColour(CustomLookAndFeel::getBorderColour().withAlpha(0.5f));
+    g.drawHorizontalLine(static_cast<int>(bottomBounds.getY()), 0.0f, bounds.getWidth());
+    
     // Advanced panel is now painted by its own component (AdvancedPanelComponent)
 }
 
@@ -422,7 +542,7 @@ void VocalRiderAudioProcessorEditor::resized()
     auto headerArea = bounds.removeFromTop(32).reduced(10, 4);
     titleLabel.setBounds(headerArea.removeFromLeft(110));
     
-    advancedButton.setBounds(headerArea.removeFromRight(30));
+    advancedButton.setBounds(headerArea.removeFromRight(26));
     headerArea.removeFromRight(4);
     presetComboBox.setBounds(headerArea.removeFromRight(100));
     
@@ -437,91 +557,99 @@ void VocalRiderAudioProcessorEditor::resized()
     fileNameLabel.setBounds(headerArea);
     #endif
     
-    // Control panel at bottom
+    // Bottom bar at very bottom
+    auto bottomArea = bounds.removeFromBottom(bottomBarHeight);
+    bottomBar.setBounds(bottomArea);
+    
+    // Resize button in bottom bar (right side)
+    int resizeButtonSize = 20;
+    resizeButton.setBounds(bottomArea.getWidth() - resizeButtonSize - 4, 1, 
+                           resizeButtonSize, resizeButtonSize);
+    
+    // Control panel at bottom (above bottom bar)
     auto controlArea = bounds.removeFromBottom(controlPanelHeight);
     controlPanel.setBounds(controlArea);
     
-    // Advanced panel (below header if visible)
-    if (advancedPanelVisible)
+    // Advanced panel (fade animation - fixed position, opacity animated)
+    bool showingPanel = advancedPanelVisible || advancedPanel.isAnimating();
+    
+    if (showingPanel)
     {
-        int advHeight = 85;
+        int advHeight = 120;  // Fixed height
         auto advArea = bounds.removeFromTop(advHeight).reduced(12, 0);
         advancedPanel.setBounds(advArea);
         
-        auto advContent = advArea.reduced(10, 8);
+        auto advContent = advArea.reduced(12, 10);
         
-        // Dropdowns
-        auto dropdownRow = advContent.removeFromTop(22);
-        lookAheadComboBox.setBounds(dropdownRow.removeFromLeft(130));
-        dropdownRow.removeFromLeft(8);
-        detectionModeComboBox.setBounds(dropdownRow.removeFromLeft(115));
-        dropdownRow.removeFromLeft(8);
-        automationModeComboBox.setBounds(dropdownRow.removeFromLeft(100));
+        // Dropdowns in row
+        auto dropdownRow = advContent.removeFromTop(24);
+        lookAheadComboBox.setBounds(dropdownRow.removeFromLeft(140));
+        dropdownRow.removeFromLeft(12);
+        detectionModeComboBox.setBounds(dropdownRow.removeFromLeft(130));
         
-        advContent.removeFromTop(4);
+        advContent.removeFromTop(6);
         
-        // Knobs
-        int advKnobSize = 44;
-        int labelHeight = 10;
+        // Knobs - LABELS BELOW knobs
+        int advKnobSize = 50;
+        int labelHeight = 12;
+        int labelWidth = 90;  // Wider labels for "BREATH REDUCTION" etc.
         int numKnobs = 5;
-        int spacing = (advContent.getWidth() - advKnobSize * numKnobs) / (numKnobs + 1);
+        int totalWidth = advContent.getWidth();
+        int spacing = (totalWidth - advKnobSize * numKnobs) / (numKnobs + 1);
         int y = advContent.getY();
         int x = advContent.getX() + spacing;
         
-        attackLabel.setBounds(x, y, advKnobSize, labelHeight);
-        attackSlider.setBounds(x, y + labelHeight, advKnobSize, advKnobSize);
+        // Knob first, then label below
+        attackSlider.setBounds(x, y, advKnobSize, advKnobSize);
+        attackLabel.setBounds(x - (labelWidth - advKnobSize) / 2, y + advKnobSize + 2, labelWidth, labelHeight);
         x += advKnobSize + spacing;
         
-        releaseLabel.setBounds(x, y, advKnobSize, labelHeight);
-        releaseSlider.setBounds(x, y + labelHeight, advKnobSize, advKnobSize);
+        releaseSlider.setBounds(x, y, advKnobSize, advKnobSize);
+        releaseLabel.setBounds(x - (labelWidth - advKnobSize) / 2, y + advKnobSize + 2, labelWidth, labelHeight);
         x += advKnobSize + spacing;
         
-        holdLabel.setBounds(x, y, advKnobSize, labelHeight);
-        holdSlider.setBounds(x, y + labelHeight, advKnobSize, advKnobSize);
+        holdSlider.setBounds(x, y, advKnobSize, advKnobSize);
+        holdLabel.setBounds(x - (labelWidth - advKnobSize) / 2, y + advKnobSize + 2, labelWidth, labelHeight);
         x += advKnobSize + spacing;
         
-        breathLabel.setBounds(x, y, advKnobSize, labelHeight);
-        breathReductionSlider.setBounds(x, y + labelHeight, advKnobSize, advKnobSize);
+        breathReductionSlider.setBounds(x, y, advKnobSize, advKnobSize);
+        breathLabel.setBounds(x - (labelWidth - advKnobSize) / 2, y + advKnobSize + 2, labelWidth, labelHeight);
         x += advKnobSize + spacing;
         
-        transientLabel.setBounds(x, y, advKnobSize, labelHeight);
-        transientPreservationSlider.setBounds(x, y + labelHeight, advKnobSize, advKnobSize);
+        transientPreservationSlider.setBounds(x, y, advKnobSize, advKnobSize);
+        transientLabel.setBounds(x - (labelWidth - advKnobSize) / 2, y + advKnobSize + 2, labelWidth, labelHeight);
     }
     
-    // Waveform fills all remaining space (extends behind panels)
-    waveformDisplay.setBounds(getLocalBounds().withTrimmedTop(32).withTrimmedBottom(controlPanelHeight - 15));
+    // Waveform fills area below header and above bottom bar
+    waveformDisplay.setBounds(getLocalBounds().withTrimmedTop(32).withTrimmedBottom(bottomBarHeight));
     
-    // Control panel contents
-    auto ctrlContent = controlArea.reduced(15, 10);
+    // Control panel contents - knobs at TOP of panel, Natural toggle BELOW knobs
+    auto ctrlContent = controlArea.reduced(12, 4);
     
-    int targetKnobSize = 80;
-    int smallKnobSize = 58;
+    int targetKnobSize = 60;
+    int smallKnobSize = 46;
     int labelHeight = 12;
     
     int centerX = ctrlContent.getCentreX();
-    int knobY = ctrlContent.getY() + 6;
+    int knobY = ctrlContent.getY() - 2;  // Start at very top
     
-    // Target in center (larger)
-    targetLabel.setBounds(centerX - targetKnobSize / 2, knobY, targetKnobSize, labelHeight);
-    targetSlider.setBounds(centerX - targetKnobSize / 2, knobY + labelHeight, targetKnobSize, targetKnobSize);
+    // Target in center (larger) - LABEL BELOW knob
+    targetSlider.setBounds(centerX - targetKnobSize / 2, knobY, targetKnobSize, targetKnobSize);
+    targetLabel.setBounds(centerX - targetKnobSize / 2, knobY + targetKnobSize + 2, targetKnobSize, labelHeight);
     
-    // Range to the left
-    int rangeX = centerX - targetKnobSize / 2 - smallKnobSize - 35;
-    rangeLabel.setBounds(rangeX, knobY + 8, smallKnobSize, labelHeight);
-    rangeSlider.setBounds(rangeX, knobY + labelHeight + 8, smallKnobSize, smallKnobSize);
+    // Range to the left - LABEL BELOW knob
+    int rangeX = centerX - targetKnobSize / 2 - smallKnobSize - 25;
+    rangeSlider.setBounds(rangeX, knobY + 5, smallKnobSize, smallKnobSize);
+    rangeLabel.setBounds(rangeX, knobY + 5 + smallKnobSize + 2, smallKnobSize, labelHeight);
     
-    // Speed to the right
-    int speedX = centerX + targetKnobSize / 2 + 35;
-    speedLabel.setBounds(speedX, knobY + 8, smallKnobSize, labelHeight);
-    speedSlider.setBounds(speedX, knobY + labelHeight + 8, smallKnobSize, smallKnobSize);
+    // Speed to the right - LABEL BELOW knob
+    int speedX = centerX + targetKnobSize / 2 + 25;
+    speedSlider.setBounds(speedX, knobY + 5, smallKnobSize, smallKnobSize);
+    speedLabel.setBounds(speedX, knobY + 5 + smallKnobSize + 2, smallKnobSize, labelHeight);
     
-    // Natural toggle
-    naturalToggle.setBounds(ctrlContent.getRight() - 90, ctrlContent.getCentreY() - 12, 85, 24);
-    
-    // Resize button in lower right corner
-    int resizeButtonSize = 20;
-    resizeButton.setBounds(getWidth() - resizeButtonSize - 8, getHeight() - resizeButtonSize - 8, 
-                           resizeButtonSize, resizeButtonSize);
+    // Natural toggle - positioned BELOW the knobs, centered
+    int toggleY = knobY + targetKnobSize + labelHeight + 8;
+    naturalToggle.setBounds(centerX - 47, toggleY, 95, 20);
 }
 
 void VocalRiderAudioProcessorEditor::timerCallback()
@@ -533,6 +661,15 @@ void VocalRiderAudioProcessorEditor::timerCallback()
         waveformDisplay.setTargetLevel(param->load());
     if (auto* param = audioProcessor.getApvts().getRawParameterValue(VocalRiderAudioProcessor::rangeParamId))
         waveformDisplay.setRange(param->load());
+    
+    // Hide tooltip when no slider is being interacted with
+    bool anySliderActive = targetSlider.isMouseOverOrDragging() ||
+                           rangeSlider.isMouseOverOrDragging() ||
+                           speedSlider.isMouseOverOrDragging();
+    if (!anySliderActive && valueTooltip.isShowing())
+    {
+        valueTooltip.hideTooltip();
+    }
 
     #if JucePlugin_Build_Standalone
     if (audioProcessor.hasFileLoaded())

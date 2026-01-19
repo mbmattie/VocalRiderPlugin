@@ -153,11 +153,12 @@ void CustomLookAndFeel::drawPanelWithBorder(juce::Graphics& g, juce::Rectangle<f
 }
 
 //==============================================================================
-// Large Featured Knob (for Target)
+// Large Featured Knob (for Target) - FabFilter style with gradient
 
 void CustomLookAndFeel::drawLargeKnob(juce::Graphics& g, juce::Rectangle<float> bounds,
                                        float sliderPosProportional, float rotaryStartAngle,
-                                       float rotaryEndAngle, juce::Colour accentColour)
+                                       float rotaryEndAngle, juce::Colour accentColour,
+                                       bool isHovered)
 {
     auto centreX = bounds.getCentreX();
     auto centreY = bounds.getCentreY();
@@ -165,200 +166,197 @@ void CustomLookAndFeel::drawLargeKnob(juce::Graphics& g, juce::Rectangle<float> 
     
     float angle = rotaryStartAngle + sliderPosProportional * (rotaryEndAngle - rotaryStartAngle);
     
-    // Outer ring shadow
-    g.setColour(getSurfaceDarkColour());
-    g.fillEllipse(centreX - radius - 2.0f, centreY - radius + 2.0f, radius * 2.0f + 4.0f, radius * 2.0f + 4.0f);
+    auto outerRadius = radius;
+    auto knobRadius = outerRadius * 0.72f;
+    float arcRadius = (outerRadius + knobRadius) / 2.0f;
+    float arcThickness = (outerRadius - knobRadius) * 0.9f;  // Thicker to fill gap
     
-    // Outer ring
-    g.setColour(getSurfaceColour().darker(0.2f));
-    g.fillEllipse(centreX - radius, centreY - radius, radius * 2.0f, radius * 2.0f);
+    // FULLY OPAQUE circular background that covers the entire knob area
+    g.setColour(juce::Colour(0xFF0D0E11));  // Very dark, matches background
+    g.fillEllipse(centreX - outerRadius, centreY - outerRadius, 
+                  outerRadius * 2.0f, outerRadius * 2.0f);
     
-    // Outer ring edge
-    g.setColour(getBorderColour());
-    g.drawEllipse(centreX - radius, centreY - radius, radius * 2.0f, radius * 2.0f, 1.5f);
+    // Outer ring - thin grey ring (brighter on hover)
+    g.setColour(isHovered ? juce::Colour(0xFF4A4D55) : juce::Colour(0xFF3A3D45));
+    g.drawEllipse(centreX - outerRadius, centreY - outerRadius, 
+                  outerRadius * 2.0f, outerRadius * 2.0f, 1.5f);
     
-    // Inner knob
-    auto innerRadius = radius * 0.72f;
-    auto innerBounds = juce::Rectangle<float>(
-        centreX - innerRadius, centreY - innerRadius,
-        innerRadius * 2.0f, innerRadius * 2.0f
+    // Main knob body with gradient (darker top, lighter bottom)
+    auto knobBounds = juce::Rectangle<float>(
+        centreX - knobRadius, centreY - knobRadius,
+        knobRadius * 2.0f, knobRadius * 2.0f
     );
     
-    // Inner knob shadow (inset look)
-    g.setColour(getSurfaceDarkColour());
-    g.fillEllipse(innerBounds.translated(1.0f, 1.0f));
+    // Arc groove background (darker ring between outer and inner)
+    juce::Path backgroundArc;
+    backgroundArc.addCentredArc(centreX, centreY, arcRadius, arcRadius, 
+                                 0.0f, rotaryStartAngle, rotaryEndAngle, true);
+    g.setColour(juce::Colour(0xFF151619));  // Dark groove
+    g.strokePath(backgroundArc, juce::PathStrokeType(arcThickness, 
+                 juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     
-    // Inner knob surface
+    // Create gradient: darker grey at top, lighter grey at bottom
     juce::ColourGradient knobGradient(
-        getSurfaceColour().brighter(0.05f),
-        centreX, centreY - innerRadius * 0.5f,
-        getSurfaceColour().darker(0.1f),
-        centreX, centreY + innerRadius * 0.5f,
+        juce::Colour(0xFF1E2028),  // Darker at top
+        centreX, centreY - knobRadius,
+        juce::Colour(0xFF353840),  // Lighter at bottom
+        centreX, centreY + knobRadius,
         false
     );
+    
+    // Fill with gradient
+    juce::Path knobPath;
+    knobPath.addEllipse(knobBounds);
     g.setGradientFill(knobGradient);
-    g.fillEllipse(innerBounds);
+    g.fillPath(knobPath);
     
-    // Inner knob edge
-    g.setColour(getBorderColour().withAlpha(0.5f));
-    g.drawEllipse(innerBounds.reduced(0.5f), 0.5f);
-    
-    // Glowing value arc in the groove
-    float arcRadius = (radius + innerRadius) / 2.0f;
-    float arcThickness = (radius - innerRadius) * 0.4f;
-    
-    // Background arc (dim)
-    juce::Path bgArc;
-    bgArc.addCentredArc(centreX, centreY, arcRadius, arcRadius, 0.0f, rotaryStartAngle, rotaryEndAngle, true);
-    g.setColour(getSurfaceDarkColour());
-    g.strokePath(bgArc, juce::PathStrokeType(arcThickness, juce::PathStrokeType::curved,
-                                              juce::PathStrokeType::rounded));
-    
-    // Value arc with glow
-    if (sliderPosProportional > 0.001f)
+    // Hover glow effect
+    if (isHovered)
     {
-        drawGlowingArc(g, centreX, centreY, arcRadius, rotaryStartAngle, angle, 
-                       arcThickness, accentColour, 12.0f);
+        g.setColour(accentColour.withAlpha(0.08f));
+        g.fillEllipse(knobBounds.expanded(3.0f));
     }
     
-    // Position indicator dot on knob
-    auto dotRadius = 4.0f;
-    auto dotDistance = innerRadius * 0.6f;
-    auto dotX = centreX + std::sin(angle) * dotDistance;
-    auto dotY = centreY - std::cos(angle) * dotDistance;
+    // Draw value arc with gradient
+    if (sliderPosProportional > 0.001f)
+    {
+        juce::Path valueArc;
+        valueArc.addCentredArc(centreX, centreY, arcRadius, arcRadius, 
+                               0.0f, rotaryStartAngle, angle, true);
+        
+        // Purple gradient for the value arc
+        juce::ColourGradient arcGradient(
+            accentColour.darker(0.3f),
+            centreX + std::sin(rotaryStartAngle) * arcRadius,
+            centreY - std::cos(rotaryStartAngle) * arcRadius,
+            accentColour.brighter(0.1f),
+            centreX + std::sin(angle) * arcRadius,
+            centreY - std::cos(angle) * arcRadius,
+            false
+        );
+        
+        g.setGradientFill(arcGradient);
+        g.strokePath(valueArc, juce::PathStrokeType(arcThickness * 0.8f, 
+                     juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
     
-    // Dot glow
-    g.setColour(accentColour.withAlpha(0.3f));
-    g.fillEllipse(dotX - dotRadius - 3.0f, dotY - dotRadius - 3.0f,
-                  (dotRadius + 3.0f) * 2.0f, (dotRadius + 3.0f) * 2.0f);
+    // Position indicator LINE - thin line from center toward edge (FabFilter style)
+    auto lineStartDist = knobRadius * 0.15f;   // Start near center
+    auto lineEndDist = knobRadius * 0.85f;     // End near edge of knob
     
-    // Dot
+    auto lineStartX = centreX + std::sin(angle) * lineStartDist;
+    auto lineStartY = centreY - std::cos(angle) * lineStartDist;
+    auto lineEndX = centreX + std::sin(angle) * lineEndDist;
+    auto lineEndY = centreY - std::cos(angle) * lineEndDist;
+    
     g.setColour(accentColour);
-    g.fillEllipse(dotX - dotRadius, dotY - dotRadius, dotRadius * 2.0f, dotRadius * 2.0f);
+    g.drawLine(lineStartX, lineStartY, lineEndX, lineEndY, 1.8f);
 }
 
 //==============================================================================
-// Modern Rotary Slider (redesigned with gradients and shadows)
+// FabFilter-style Rotary Slider (clean, minimal design with gradient)
 
 void CustomLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
                                           float sliderPosProportional, float rotaryStartAngle,
-                                          float rotaryEndAngle, juce::Slider&)
+                                          float rotaryEndAngle, juce::Slider& slider)
 {
     auto bounds = juce::Rectangle<int>(x, y, width, height).toFloat();
     auto centreX = bounds.getCentreX();
     auto centreY = bounds.getCentreY();
-    auto radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) / 2.0f * 0.88f;
+    auto radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) / 2.0f * 0.9f;
     
     float angle = rotaryStartAngle + sliderPosProportional * (rotaryEndAngle - rotaryStartAngle);
+    auto accentColour = getAccentColour();  // Purple accent
     
-    // Outer shadow (soft, offset)
-    g.setColour(juce::Colours::black.withAlpha(0.5f));
-    g.fillEllipse(centreX - radius + 1.5f, centreY - radius + 2.0f, radius * 2.0f, radius * 2.0f);
+    // Check if mouse is over for hover effect
+    bool isHovered = slider.isMouseOver();
     
-    // Outer ring with gradient
     auto outerRadius = radius;
-    juce::ColourGradient outerGradient(
-        getSurfaceColour().brighter(0.15f),
-        centreX - outerRadius * 0.6f, centreY - outerRadius * 0.6f,
-        getSurfaceDarkColour().darker(0.2f),
-        centreX + outerRadius * 0.6f, centreY + outerRadius * 0.6f,
-        false
+    auto knobRadius = outerRadius * 0.72f;
+    float arcRadius = (outerRadius + knobRadius) / 2.0f;
+    float arcThickness = (outerRadius - knobRadius) * 0.9f;  // Slightly thicker to fill gap
+    
+    // FULLY OPAQUE circular background that covers the entire knob area
+    // This prevents the waveform from showing through the gap
+    g.setColour(juce::Colour(0xFF0D0E11));  // Very dark, matches background
+    g.fillEllipse(centreX - outerRadius, centreY - outerRadius, 
+                  outerRadius * 2.0f, outerRadius * 2.0f);
+    
+    // Outer ring - thin grey ring (brighter on hover)
+    g.setColour(isHovered ? juce::Colour(0xFF4A4D55) : juce::Colour(0xFF3A3D45));
+    g.drawEllipse(centreX - outerRadius, centreY - outerRadius, 
+                  outerRadius * 2.0f, outerRadius * 2.0f, 1.5f);
+    
+    // Arc groove background (darker ring between outer and inner)
+    juce::Path backgroundArc;
+    backgroundArc.addCentredArc(centreX, centreY, arcRadius, arcRadius, 
+                                 0.0f, rotaryStartAngle, rotaryEndAngle, true);
+    g.setColour(juce::Colour(0xFF151619));  // Dark groove
+    g.strokePath(backgroundArc, juce::PathStrokeType(arcThickness, 
+                 juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    
+    // Main knob body with gradient (darker top, lighter bottom)
+    auto knobBounds = juce::Rectangle<float>(
+        centreX - knobRadius, centreY - knobRadius,
+        knobRadius * 2.0f, knobRadius * 2.0f
     );
-    g.setGradientFill(outerGradient);
-    g.fillEllipse(centreX - outerRadius, centreY - outerRadius, outerRadius * 2.0f, outerRadius * 2.0f);
     
-    // Outer ring highlight (top-left)
-    g.setColour(getSurfaceLightColour().withAlpha(0.3f));
-    g.drawEllipse(centreX - outerRadius, centreY - outerRadius, outerRadius * 2.0f, outerRadius * 2.0f, 1.5f);
-    
-    // Inner knob with modern gradient
-    auto innerRadius = outerRadius * 0.72f;
-    auto innerBounds = juce::Rectangle<float>(
-        centreX - innerRadius, centreY - innerRadius,
-        innerRadius * 2.0f, innerRadius * 2.0f
-    );
-    
-    // Inner shadow (inset effect)
-    g.setColour(juce::Colours::black.withAlpha(0.4f));
-    g.fillEllipse(innerBounds.translated(0.0f, 1.5f));
-    
-    // Inner knob - radial gradient for 3D effect
+    // Create gradient: darker grey at top, lighter grey at bottom
     juce::ColourGradient knobGradient(
-        getSurfaceColour().brighter(0.2f),
-        centreX - innerRadius * 0.4f, centreY - innerRadius * 0.4f,
-        getSurfaceColour().darker(0.15f),
-        centreX + innerRadius * 0.4f, centreY + innerRadius * 0.4f,
+        juce::Colour(0xFF1E2028),  // Darker at top
+        centreX, centreY - knobRadius,
+        juce::Colour(0xFF353840),  // Lighter at bottom
+        centreX, centreY + knobRadius,
         false
     );
+    
+    // Fill knob with gradient using a path
+    juce::Path knobPath;
+    knobPath.addEllipse(knobBounds);
     g.setGradientFill(knobGradient);
-    g.fillEllipse(innerBounds);
+    g.fillPath(knobPath);
     
-    // Inner highlight ring (top-left)
-    g.setColour(getSurfaceLightColour().withAlpha(0.4f));
-    g.drawEllipse(innerBounds.reduced(0.5f), 1.0f);
+    // Hover glow effect
+    if (isHovered)
+    {
+        g.setColour(accentColour.withAlpha(0.1f));
+        g.fillEllipse(knobBounds.expanded(3.0f));
+    }
     
-    // Value arc track (background)
-    float arcRadius = (outerRadius + innerRadius) / 2.0f;
-    float arcThickness = (outerRadius - innerRadius) * 0.6f;
-    
-    juce::Path trackArc;
-    trackArc.addCentredArc(centreX, centreY, arcRadius, arcRadius, 0.0f, rotaryStartAngle, rotaryEndAngle, true);
-    g.setColour(getSurfaceDarkColour().withAlpha(0.6f));
-    g.strokePath(trackArc, juce::PathStrokeType(arcThickness, juce::PathStrokeType::curved,
-                                                 juce::PathStrokeType::rounded));
-    
-    // Value arc with modern glow
+    // Draw value arc with gradient (darker purple to lighter purple)
     if (sliderPosProportional > 0.001f)
     {
         juce::Path valueArc;
-        valueArc.addCentredArc(centreX, centreY, arcRadius, arcRadius, 0.0f, rotaryStartAngle, angle, true);
+        valueArc.addCentredArc(centreX, centreY, arcRadius, arcRadius, 
+                               0.0f, rotaryStartAngle, angle, true);
         
-        // Glow layers
-        for (float i = 8.0f; i > 0.0f; i -= 1.5f)
-        {
-            float alpha = 0.12f * (i / 8.0f);
-            g.setColour(getAccentColour().withAlpha(alpha));
-            g.strokePath(valueArc, juce::PathStrokeType(arcThickness + i * 1.5f,
-                         juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        }
-        
-        // Main arc with gradient
+        // Create purple gradient for the value arc
         juce::ColourGradient arcGradient(
-            getAccentBrightColour(),
-            centreX - arcRadius * 0.5f, centreY - arcRadius * 0.5f,
-            getAccentColour(),
-            centreX + arcRadius * 0.5f, centreY + arcRadius * 0.5f,
+            accentColour.darker(0.3f),  // Darker purple at start
+            centreX + std::sin(rotaryStartAngle) * arcRadius,
+            centreY - std::cos(rotaryStartAngle) * arcRadius,
+            accentColour.brighter(0.1f),  // Lighter purple at end
+            centreX + std::sin(angle) * arcRadius,
+            centreY - std::cos(angle) * arcRadius,
             false
         );
+        
         g.setGradientFill(arcGradient);
-        g.strokePath(valueArc, juce::PathStrokeType(arcThickness, juce::PathStrokeType::curved,
-                                                     juce::PathStrokeType::rounded));
+        g.strokePath(valueArc, juce::PathStrokeType(arcThickness * 0.85f, 
+                     juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
     
-    // Modern pointer (dot indicator)
-    auto dotRadius = 5.0f;
-    auto dotDistance = innerRadius * 0.65f;
-    auto dotX = centreX + std::sin(angle) * dotDistance;
-    auto dotY = centreY - std::cos(angle) * dotDistance;
+    // Position indicator LINE - thin line from center toward edge (FabFilter style)
+    auto lineStartDist = knobRadius * 0.15f;   // Start near center
+    auto lineEndDist = knobRadius * 0.85f;     // End near edge of knob
     
-    // Dot shadow
-    g.setColour(juce::Colours::black.withAlpha(0.5f));
-    g.fillEllipse(dotX - dotRadius + 0.5f, dotY - dotRadius + 1.0f, dotRadius * 2.0f, dotRadius * 2.0f);
+    auto lineStartX = centreX + std::sin(angle) * lineStartDist;
+    auto lineStartY = centreY - std::cos(angle) * lineStartDist;
+    auto lineEndX = centreX + std::sin(angle) * lineEndDist;
+    auto lineEndY = centreY - std::cos(angle) * lineEndDist;
     
-    // Dot with gradient
-    juce::ColourGradient dotGradient(
-        getAccentBrightColour(),
-        dotX - dotRadius * 0.5f, dotY - dotRadius * 0.5f,
-        getAccentColour(),
-        dotX + dotRadius * 0.5f, dotY + dotRadius * 0.5f,
-        false
-    );
-    g.setGradientFill(dotGradient);
-    g.fillEllipse(dotX - dotRadius, dotY - dotRadius, dotRadius * 2.0f, dotRadius * 2.0f);
-    
-    // Dot highlight
-    g.setColour(juce::Colours::white.withAlpha(0.4f));
-    g.fillEllipse(dotX - dotRadius * 0.4f, dotY - dotRadius * 0.6f, dotRadius * 0.8f, dotRadius * 0.8f);
+    g.setColour(accentColour);
+    g.drawLine(lineStartX, lineStartY, lineEndX, lineEndY, 1.5f);
 }
 
 //==============================================================================
@@ -381,7 +379,7 @@ void CustomLookAndFeel::drawLabel(juce::Graphics& g, juce::Label& label)
 
 juce::Font CustomLookAndFeel::getLabelFont(juce::Label&)
 {
-    return juce::Font(juce::FontOptions(11.0f));
+    return getPluginFont(11.0f);
 }
 
 //==============================================================================
@@ -509,6 +507,6 @@ void CustomLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& 
     auto textBounds = bounds;
     textBounds.removeFromLeft(toggleWidth + 10.0f);
     g.setColour(button.findColour(juce::ToggleButton::textColourId));
-    g.setFont(juce::Font(juce::FontOptions(11.0f)));
+    g.setFont(getPluginFont(11.0f));
     g.drawText(button.getButtonText(), textBounds, juce::Justification::centredLeft);
 }

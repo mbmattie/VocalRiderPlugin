@@ -30,7 +30,6 @@ void WaveformDisplay::resized()
 {
     auto bounds = getLocalBounds().toFloat();
     
-    handleArea = bounds.removeFromLeft(static_cast<float>(handleAreaWidth));
     waveformArea = bounds;
     waveformArea.removeFromRight(static_cast<float>(ioMeterWidth) + 4.0f);
     
@@ -81,17 +80,29 @@ float WaveformDisplay::gainDbToY(float gainDb) const
     float cut = cutRangeDb.load();
     float targetY = dbToY(target);
     
-    float rangeHeight = waveformArea.getHeight() * 0.25f;
+    // Base range height at 12dB (full scale)
+    float maxRangeHeight = waveformArea.getHeight() * 0.25f;
     
-    if (gainDb >= 0)
+    // CLAMP the gain to the range bounds so curve never goes outside
+    float clampedGain = juce::jlimit(-cut, boost, gainDb);
+    
+    // Scale the visual range based on actual range setting (same as range lines)
+    // This matches how drawTargetAndRangeLines calculates boostY/cutY
+    if (clampedGain >= 0)
     {
-        float normalizedGain = juce::jlimit(0.0f, 1.0f, gainDb / boost);
-        return targetY - normalizedGain * rangeHeight;
+        // Boost: scale by (boost/12.0f) to match range line position
+        float rangeScale = boost / 12.0f;
+        float actualRangeHeight = maxRangeHeight * rangeScale;
+        float normalizedGain = juce::jlimit(0.0f, 1.0f, clampedGain / boost);
+        return targetY - normalizedGain * actualRangeHeight;
     }
     else
     {
-        float normalizedGain = juce::jlimit(0.0f, 1.0f, -gainDb / cut);
-        return targetY + normalizedGain * rangeHeight;
+        // Cut: scale by (cut/12.0f) to match range line position
+        float rangeScale = cut / 12.0f;
+        float actualRangeHeight = maxRangeHeight * rangeScale;
+        float normalizedGain = juce::jlimit(0.0f, 1.0f, -clampedGain / cut);
+        return targetY + normalizedGain * actualRangeHeight;
     }
 }
 
@@ -100,25 +111,29 @@ float WaveformDisplay::gainDbToY(float gainDb) const
 
 WaveformDisplay::DragTarget WaveformDisplay::hitTestHandle(const juce::Point<float>& pos) const
 {
+    // Only allow dragging within the waveform area
+    if (!waveformArea.contains(pos))
+        return DragTarget::None;
+    
     float target = targetLevelDb.load();
     float boost = boostRangeDb.load();
     float cut = cutRangeDb.load();
     float targetY = dbToY(target);
     float rangeHeight = waveformArea.getHeight() * 0.25f;
     
-    // Target handle
-    if (pos.x < handleAreaWidth + 20.0f && std::abs(pos.y - targetY) < handleHitDistance)
-        return DragTarget::TargetHandle;
-    
-    // Boost (upper) range handle
+    // Boost (upper) range handle - check first since it's on top
     float boostY = targetY - rangeHeight * (boost / 12.0f);
-    if (pos.x < handleAreaWidth + 20.0f && std::abs(pos.y - boostY) < handleHitDistance)
+    if (std::abs(pos.y - boostY) < handleHitDistance)
         return DragTarget::BoostRangeHandle;
     
     // Cut (lower) range handle
     float cutY = targetY + rangeHeight * (cut / 12.0f);
-    if (pos.x < handleAreaWidth + 20.0f && std::abs(pos.y - cutY) < handleHitDistance)
+    if (std::abs(pos.y - cutY) < handleHitDistance)
         return DragTarget::CutRangeHandle;
+    
+    // Target handle (check last - in the middle, might conflict with range)
+    if (std::abs(pos.y - targetY) < handleHitDistance)
+        return DragTarget::TargetHandle;
     
     return DragTarget::None;
 }
@@ -397,7 +412,7 @@ void WaveformDisplay::paint(juce::Graphics& g)
     drawGhostWaveform(g);
     drawWaveform(g);
     drawGainCurve(g);
-    drawHandles(g);
+    // drawHandles removed - no left-side handles
     drawIOMeters(g);
     drawClippingIndicator(g);
 }
@@ -417,7 +432,7 @@ void WaveformDisplay::drawBackground(juce::Graphics& g)
     g.setGradientFill(bgGradient);
     g.fillRect(bounds);
     
-    CustomLookAndFeel::drawGrainTexture(g, getLocalBounds(), 0.015f);
+    // Grain texture removed for cleaner look
     
     // Waveform area with gradient (darker inset)
     juce::ColourGradient areaGradient(
@@ -433,25 +448,34 @@ void WaveformDisplay::drawBackground(juce::Graphics& g)
 
 void WaveformDisplay::drawGridLines(juce::Graphics& g)
 {
-    g.setColour(CustomLookAndFeel::getBorderColour().withAlpha(0.25f));
+    auto bounds = getLocalBounds().toFloat();
     
-    // Horizontal lines at key dB levels
-    float dbLevels[] = { 0.0f, -6.0f, -12.0f, -18.0f, -24.0f, -36.0f };
+    // Pro-C 3 style: horizontal lines at every 3dB from 0 to -36
+    // These lines extend across the ENTIRE display (including meter area)
+    float dbLevels[] = { 0.0f, -3.0f, -6.0f, -9.0f, -12.0f, -15.0f, -18.0f, -21.0f, 
+                         -24.0f, -27.0f, -30.0f, -33.0f, -36.0f };
+    
     for (float db : dbLevels)
     {
         float y = dbToY(db);
         if (y > waveformArea.getY() && y < waveformArea.getBottom())
         {
-            g.drawHorizontalLine(static_cast<int>(y), waveformArea.getX(), waveformArea.getRight());
-            
-            // dB labels
-            g.setFont(juce::Font(juce::FontOptions(8.0f)));
-            g.setColour(CustomLookAndFeel::getVeryDimTextColour());
-            g.drawText(juce::String(static_cast<int>(db)), 
-                       static_cast<int>(handleArea.getRight() - 25), static_cast<int>(y - 6), 
-                       20, 12, juce::Justification::centredRight);
-            g.setColour(CustomLookAndFeel::getBorderColour().withAlpha(0.25f));
+            // Major lines at 0, -12, -24, -36 are brighter
+            bool isMajor = (static_cast<int>(db) % 12 == 0);
+            g.setColour(CustomLookAndFeel::getBorderColour().withAlpha(isMajor ? 0.2f : 0.08f));
+            // Extend line across the entire width (through meter area)
+            g.drawHorizontalLine(static_cast<int>(y), waveformArea.getX(), bounds.getRight() - 4.0f);
         }
+    }
+    
+    // Vertical grid lines for time reference (very faint)
+    g.setColour(CustomLookAndFeel::getBorderColour().withAlpha(0.04f));
+    int numVerticalLines = 8;
+    float xStep = waveformArea.getWidth() / static_cast<float>(numVerticalLines);
+    for (int i = 1; i < numVerticalLines; ++i)
+    {
+        float x = waveformArea.getX() + i * xStep;
+        g.drawVerticalLine(static_cast<int>(x), waveformArea.getY(), waveformArea.getBottom());
     }
 }
 
@@ -495,71 +519,76 @@ void WaveformDisplay::drawTargetAndRangeLines(juce::Graphics& g)
 
 void WaveformDisplay::drawHandles(juce::Graphics& g)
 {
-    float target = targetLevelDb.load();
-    float boost = boostRangeDb.load();
-    float cut = cutRangeDb.load();
-    float targetY = dbToY(target);
-    float rangeHeight = waveformArea.getHeight() * 0.25f;
-    
-    float handleX = handleArea.getRight() - 8.0f;
-    float handleWidth = 55.0f;
-    float handleHeight = 18.0f;
-    
-    // Helper lambda to draw a handle
-    auto drawHandle = [&](float y, const juce::String& text, juce::Colour colour, bool isHovered) {
-        auto bounds = juce::Rectangle<float>(handleX - handleWidth, y - handleHeight / 2.0f, handleWidth, handleHeight);
-        
-        g.setColour(CustomLookAndFeel::getSurfaceColour());
-        g.fillRoundedRectangle(bounds, 4.0f);
-        
-        if (isHovered)
-        {
-            g.setColour(colour.withAlpha(0.3f));
-            g.fillRoundedRectangle(bounds.expanded(2.0f), 5.0f);
-        }
-        
-        g.setColour(colour);
-        g.drawRoundedRectangle(bounds, 4.0f, 1.0f);
-        
-        g.setFont(juce::Font(juce::FontOptions(9.0f, juce::Font::bold)));
-        g.drawText(text, bounds, juce::Justification::centred);
-        
-        // Connecting line
-        g.setColour(colour.withAlpha(0.4f));
-        g.drawLine(handleX, y, waveformArea.getX(), y, 1.0f);
-    };
-    
-    // Target handle
-    drawHandle(targetY, juce::String(target, 1) + " dB", 
-               CustomLookAndFeel::getTargetLineColour(),
-               hoverTarget == DragTarget::TargetHandle);
-    
-    // Boost handle
-    float boostY = targetY - rangeHeight * (boost / 12.0f);
-    drawHandle(boostY, "+" + juce::String(boost, 1),
-               CustomLookAndFeel::getGainBoostColour(),
-               hoverTarget == DragTarget::BoostRangeHandle);
-    
-    // Cut handle
-    float cutY = targetY + rangeHeight * (cut / 12.0f);
-    drawHandle(cutY, "-" + juce::String(cut, 1),
-               CustomLookAndFeel::getGainCutColour(),
-               hoverTarget == DragTarget::CutRangeHandle);
+    // Handles are no longer drawn - target and range are now draggable by clicking
+    // directly on their lines in the waveform area
+    juce::ignoreUnused(g);
 }
 
 void WaveformDisplay::drawGhostWaveform(juce::Graphics& g)
 {
-    // Ghost waveform shows the OUTPUT (after gain)
-    // Only visible when there's a difference from input
+    // Output waveform - shows the processed signal with color-coded boost/cut
+    // When boosted (output > input): draw in GREEN above input
+    // When cut (output < input): draw in RED below input (fill gap between)
     
     juce::SpinLock::ScopedLockType lock(bufferLock);
     
     int currentWrite = writeIndex.load();
     int bufferSize = static_cast<int>(displayBuffer.size());
     
-    juce::Path ghostPath;
+    if (!hasActiveAudio) return;  // Don't show output waveform when no audio
+    
+    // Colors for boost/cut visualization
+    juce::Colour boostColour = CustomLookAndFeel::getGainBoostColour();  // Green
+    juce::Colour cutColour = CustomLookAndFeel::getGainCutColour();      // Red
+    
+    // Draw vertical slices showing the difference between input and output
+    for (int i = 0; i < bufferSize; ++i)
+    {
+        int bufIdx = (currentWrite + i) % bufferSize;
+        const auto& sample = displayBuffer[static_cast<size_t>(bufIdx)];
+        
+        float x = waveformArea.getX() + (static_cast<float>(i) / static_cast<float>(bufferSize)) * waveformArea.getWidth();
+        float nextX = waveformArea.getX() + (static_cast<float>(i + 1) / static_cast<float>(bufferSize)) * waveformArea.getWidth();
+        float sliceWidth = nextX - x + 0.5f;
+        
+        float inputY = linearToLogY(sample.inputPeak);
+        float outputY = linearToLogY(sample.outputPeak);
+        
+        float gainDb = sample.gainDb;
+        
+        if (gainDb > 0.3f && sample.outputPeak > 0.001f)  // Boosting
+        {
+            // Green area above input waveform (output is higher/louder)
+            float topY = juce::jmin(inputY, outputY);
+            float bottomY = juce::jmax(inputY, outputY);
+            float height = bottomY - topY;
+            
+            if (height > 0.5f)
+            {
+                float intensity = juce::jmin(gainDb / 8.0f, 1.0f);
+                g.setColour(boostColour.withAlpha(0.25f + intensity * 0.2f));
+                g.fillRect(x, topY, sliceWidth, height);
+            }
+        }
+        else if (gainDb < -0.3f && sample.inputPeak > 0.001f)  // Cutting
+        {
+            // Red area showing the "missing" audio (what was cut)
+            float topY = juce::jmin(inputY, outputY);
+            float bottomY = juce::jmax(inputY, outputY);
+            float height = bottomY - topY;
+            
+            if (height > 0.5f)
+            {
+                float intensity = juce::jmin(-gainDb / 8.0f, 1.0f);
+                g.setColour(cutColour.withAlpha(0.2f + intensity * 0.15f));
+                g.fillRect(x, topY, sliceWidth, height);
+            }
+        }
+    }
+    
+    // Draw the output waveform outline
+    juce::Path outputPath;
     bool pathStarted = false;
-    float baseY = waveformArea.getBottom();
     
     for (int i = 0; i < bufferSize; ++i)
     {
@@ -571,25 +600,20 @@ void WaveformDisplay::drawGhostWaveform(juce::Graphics& g)
         
         if (!pathStarted)
         {
-            ghostPath.startNewSubPath(x, baseY);
+            outputPath.startNewSubPath(x, y);
             pathStarted = true;
         }
-        ghostPath.lineTo(x, y);
+        else
+        {
+            outputPath.lineTo(x, y);
+        }
     }
     
-    ghostPath.lineTo(waveformArea.getRight(), baseY);
-    ghostPath.closeSubPath();
-    
-    // Modern gradient fill for ghost waveform
-    juce::ColourGradient ghostGradient(
-        CustomLookAndFeel::getWaveformColour().withAlpha(0.35f),
-        waveformArea.getX(), waveformArea.getY() + waveformArea.getHeight() * 0.3f,
-        CustomLookAndFeel::getWaveformColour().withAlpha(0.15f),
-        waveformArea.getX(), waveformArea.getBottom(),
-        false
-    );
-    g.setGradientFill(ghostGradient);
-    g.fillPath(ghostPath);
+    // Draw output waveform line with color based on current gain
+    // Use a subtle white/grey line for the output
+    g.setColour(juce::Colour(0xFFFFFFFF).withAlpha(0.35f));
+    g.strokePath(outputPath, juce::PathStrokeType(1.0f, juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded));
 }
 
 void WaveformDisplay::drawWaveform(juce::Graphics& g)
@@ -600,6 +624,13 @@ void WaveformDisplay::drawWaveform(juce::Graphics& g)
     
     int currentWrite = writeIndex.load();
     int bufferSize = static_cast<int>(displayBuffer.size());
+    
+    // Color depends on audio activity
+    // When no audio: very dark grey (almost black)
+    // When audio playing: light grey for waveform
+    juce::Colour waveformGrey = hasActiveAudio 
+        ? juce::Colour(0xFFB8BCC5)   // Light grey when active
+        : juce::Colour(0xFF252830);  // Very dark when no audio
     
     juce::Path waveformPath;
     bool pathStarted = false;
@@ -624,16 +655,50 @@ void WaveformDisplay::drawWaveform(juce::Graphics& g)
     waveformPath.lineTo(waveformArea.getRight(), baseY);
     waveformPath.closeSubPath();
     
-    // Modern multi-stop gradient fill for waveform
+    // Draw gain indication background (green for boost, red for cut)
+    // Very subtle tints - only show when audio is active
+    if (hasActiveAudio)
+    {
+        for (int i = 0; i < bufferSize; ++i)
+        {
+            int bufIdx = (currentWrite + i) % bufferSize;
+            const auto& sample = displayBuffer[static_cast<size_t>(bufIdx)];
+            
+            float x = waveformArea.getX() + (static_cast<float>(i) / static_cast<float>(bufferSize)) * waveformArea.getWidth();
+            float nextX = waveformArea.getX() + (static_cast<float>(i + 1) / static_cast<float>(bufferSize)) * waveformArea.getWidth();
+            float sliceWidth = nextX - x;
+            
+            // Gain in dB - positive is boost, negative is cut
+            float gainDb = sample.gainDb;
+            
+            if (gainDb > 0.5f)  // Boosting
+            {
+                float intensity = juce::jmin(gainDb / 12.0f, 1.0f);  // Normalize to 0-1
+                // Very subtle - max alpha of 0.08
+                g.setColour(CustomLookAndFeel::getGainBoostColour().withAlpha(intensity * 0.08f));
+                g.fillRect(x, waveformArea.getY(), sliceWidth + 1.0f, waveformArea.getHeight());
+            }
+            else if (gainDb < -0.5f)  // Cutting
+            {
+                float intensity = juce::jmin(-gainDb / 12.0f, 1.0f);  // Normalize to 0-1
+                // Very subtle - max alpha of 0.08
+                g.setColour(CustomLookAndFeel::getGainCutColour().withAlpha(intensity * 0.08f));
+                g.fillRect(x, waveformArea.getY(), sliceWidth + 1.0f, waveformArea.getHeight());
+            }
+        }
+    }
+    
+    // Waveform fill - opacity depends on activity
+    float waveformAlpha = hasActiveAudio ? 0.7f : 0.15f;
     juce::ColourGradient waveGradient(
-        CustomLookAndFeel::getWaveformColour().brighter(0.2f).withAlpha(0.85f),
+        waveformGrey.withAlpha(waveformAlpha),
         waveformArea.getX(), waveformArea.getY() + waveformArea.getHeight() * 0.2f,
-        CustomLookAndFeel::getWaveformColour().withAlpha(0.6f),
+        waveformGrey.withAlpha(waveformAlpha * 0.6f),
         waveformArea.getX(), waveformArea.getY() + waveformArea.getHeight() * 0.5f,
         false
     );
-    waveGradient.addColour(0.7f, CustomLookAndFeel::getWaveformColour().withAlpha(0.4f));
-    waveGradient.addColour(1.0f, CustomLookAndFeel::getWaveformColour().withAlpha(0.2f));
+    waveGradient.addColour(0.7f, waveformGrey.withAlpha(waveformAlpha * 0.4f));
+    waveGradient.addColour(1.0f, waveformGrey.withAlpha(waveformAlpha * 0.15f));
     g.setGradientFill(waveGradient);
     g.fillPath(waveformPath);
     
@@ -650,13 +715,14 @@ void WaveformDisplay::drawWaveform(juce::Graphics& g)
         outlinePath.lineTo(x, y);
     }
     
-    // Outline with subtle glow
-    g.setColour(CustomLookAndFeel::getWaveformColour().withAlpha(0.3f));
+    // Outline with subtle glow - only prominent when active
+    float outlineAlpha = hasActiveAudio ? 0.25f : 0.08f;
+    g.setColour(waveformGrey.withAlpha(outlineAlpha));
     g.strokePath(outlinePath, juce::PathStrokeType(2.5f, juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
     
     // Main outline
-    g.setColour(CustomLookAndFeel::getWaveformColour().brighter(0.1f));
+    g.setColour(waveformGrey.withAlpha(hasActiveAudio ? 0.6f : 0.1f));
     g.strokePath(outlinePath, juce::PathStrokeType(1.5f, juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
 }
@@ -676,42 +742,58 @@ void WaveformDisplay::drawGainCurve(juce::Graphics& g)
     int bufferSize = static_cast<int>(displayBuffer.size());
     float target = targetLevelDb.load();
     float targetY = dbToY(target);
+    float boost = boostRangeDb.load();
+    float cut = cutRangeDb.load();
     
-    juce::Path gainPath;
-    bool pathStarted = false;
+    float alpha = gainCurveOpacity;
     
-    for (int i = 0; i < bufferSize; ++i)
+    // Colors for boost (electric blue) and cut (purple)
+    juce::Colour boostColour(0xFF00D4FF);  // Electric blue/cyan
+    juce::Colour cutColour(0xFFB48EFF);     // Purple
+    
+    // Draw the gain curve as individual line segments with color based on gain direction
+    for (int i = 0; i < bufferSize - 1; ++i)
     {
         int bufIdx = (currentWrite + i) % bufferSize;
+        int nextBufIdx = (currentWrite + i + 1) % bufferSize;
         const auto& sample = displayBuffer[static_cast<size_t>(bufIdx)];
+        const auto& nextSample = displayBuffer[static_cast<size_t>(nextBufIdx)];
         
-        float x = waveformArea.getX() + (static_cast<float>(i) / static_cast<float>(bufferSize)) * waveformArea.getWidth();
-        float y = gainDbToY(sample.gainDb);
+        // Clamp gain to range bounds
+        float gainDb = juce::jlimit(-cut, boost, sample.gainDb);
+        float nextGainDb = juce::jlimit(-cut, boost, nextSample.gainDb);
         
-        if (!pathStarted)
+        float x1 = waveformArea.getX() + (static_cast<float>(i) / static_cast<float>(bufferSize)) * waveformArea.getWidth();
+        float x2 = waveformArea.getX() + (static_cast<float>(i + 1) / static_cast<float>(bufferSize)) * waveformArea.getWidth();
+        float y1 = gainDbToY(gainDb);
+        float y2 = gainDbToY(nextGainDb);
+        
+        // Average gain of this segment determines color
+        float avgGain = (gainDb + nextGainDb) / 2.0f;
+        
+        // Interpolate color based on gain: boost = electric blue, cut = purple
+        // At 0 gain (target line), we blend between the two
+        juce::Colour segmentColour;
+        if (avgGain >= 0)
         {
-            gainPath.startNewSubPath(x, y);
-            pathStarted = true;
+            // Boosting: interpolate from middle color to electric blue
+            float t = juce::jmin(avgGain / boost, 1.0f);
+            segmentColour = cutColour.interpolatedWith(boostColour, 0.5f + t * 0.5f);
         }
         else
         {
-            gainPath.lineTo(x, y);
+            // Cutting: interpolate from middle color to purple
+            float t = juce::jmin(-avgGain / cut, 1.0f);
+            segmentColour = boostColour.interpolatedWith(cutColour, 0.5f + t * 0.5f);
         }
-    }
-    
-    if (pathStarted)
-    {
-        float alpha = gainCurveOpacity;
         
-        // Glow
-        g.setColour(CustomLookAndFeel::getGainCurveColour().withAlpha(0.15f * alpha));
-        g.strokePath(gainPath, juce::PathStrokeType(6.0f, juce::PathStrokeType::curved,
-                                                     juce::PathStrokeType::rounded));
+        // Draw glow
+        g.setColour(segmentColour.withAlpha(0.12f * alpha));
+        g.drawLine(x1, y1, x2, y2, 5.0f);
         
-        // Main line
-        g.setColour(CustomLookAndFeel::getGainCurveColour().withAlpha(alpha));
-        g.strokePath(gainPath, juce::PathStrokeType(2.5f, juce::PathStrokeType::curved,
-                                                     juce::PathStrokeType::rounded));
+        // Draw main line segment
+        g.setColour(segmentColour.withAlpha(alpha));
+        g.drawLine(x1, y1, x2, y2, 2.5f);
     }
     
     juce::ignoreUnused(targetY);
@@ -723,37 +805,139 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
     auto meterArea = bounds.removeFromRight(static_cast<float>(ioMeterWidth));
     meterArea.reduce(2.0f, 8.0f);
     
-    float meterWidth = meterArea.getWidth() / 2.0f - 2.0f;
+    // Reserve space for dB readouts at top
+    float readoutHeight = 16.0f;
+    auto readoutArea = meterArea.removeFromTop(readoutHeight);
+    meterArea.removeFromTop(4.0f);  // Gap
+    
+    // Reserve space for dB scale labels on LEFT (Pro-C 2 style)
+    float scaleWidth = 16.0f;
+    auto scaleArea = meterArea.removeFromLeft(scaleWidth);
+    meterArea.removeFromLeft(2.0f);  // Gap
+    
+    float meterWidth = (meterArea.getWidth() - 3.0f) / 2.0f;
     
     auto inputMeterBounds = juce::Rectangle<float>(meterArea.getX(), meterArea.getY(), meterWidth, meterArea.getHeight());
-    auto outputMeterBounds = juce::Rectangle<float>(meterArea.getX() + meterWidth + 4.0f, meterArea.getY(), meterWidth, meterArea.getHeight());
+    auto outputMeterBounds = juce::Rectangle<float>(meterArea.getX() + meterWidth + 3.0f, meterArea.getY(), meterWidth, meterArea.getHeight());
     
     // Backgrounds
     g.setColour(CustomLookAndFeel::getSurfaceDarkColour());
-    g.fillRoundedRectangle(inputMeterBounds, 2.0f);
-    g.fillRoundedRectangle(outputMeterBounds, 2.0f);
+    g.fillRoundedRectangle(inputMeterBounds, 3.0f);
+    g.fillRoundedRectangle(outputMeterBounds, 3.0f);
     
-    // Input meter
+    // Input meter - RED color (range: -36dB to 0dB to match scale)
     float inputDb = inputLevelDb.load();
-    float inputNorm = juce::jmap(inputDb, -48.0f, 0.0f, 0.0f, 1.0f);
+    float inputNorm = juce::jmap(inputDb, -36.0f, 0.0f, 0.0f, 1.0f);
     inputNorm = juce::jlimit(0.0f, 1.0f, inputNorm);
     
-    auto inputFill = inputMeterBounds.reduced(1.0f);
+    auto inputFill = inputMeterBounds.reduced(1.5f);
     auto inputBar = inputFill.removeFromBottom(inputNorm * inputFill.getHeight());
-    g.setColour(CustomLookAndFeel::getWaveformColour());
-    g.fillRoundedRectangle(inputBar, 1.0f);
     
-    // Output meter
+    // Red color for input meter
+    juce::Colour inputColour = (inputDb > -3.0f) 
+        ? CustomLookAndFeel::getWarningColour()  // Bright red when hot
+        : juce::Colour(0xFFE05555);              // Softer red normally
+    g.setColour(inputColour);
+    g.fillRoundedRectangle(inputBar, 2.0f);
+    
+    // Output meter - GREEN color (range: -36dB to 0dB to match scale)
     float outputDb = outputLevelDb.load();
-    float outputNorm = juce::jmap(outputDb, -48.0f, 0.0f, 0.0f, 1.0f);
+    float outputNorm = juce::jmap(outputDb, -36.0f, 0.0f, 0.0f, 1.0f);
     outputNorm = juce::jlimit(0.0f, 1.0f, outputNorm);
     
-    auto outputFill = outputMeterBounds.reduced(1.0f);
+    auto outputFill = outputMeterBounds.reduced(1.5f);
     auto outputBar = outputFill.removeFromBottom(outputNorm * outputFill.getHeight());
     
-    auto outputColour = (outputDb > -3.0f) ? CustomLookAndFeel::getWarningColour() : CustomLookAndFeel::getAccentColour();
+    // Green color for output meter
+    juce::Colour outputColour = (outputDb > -3.0f) 
+        ? CustomLookAndFeel::getWarningColour()  // Red when clipping
+        : CustomLookAndFeel::getGainBoostColour();  // Green normally
     g.setColour(outputColour);
-    g.fillRoundedRectangle(outputBar, 1.0f);
+    g.fillRoundedRectangle(outputBar, 2.0f);
+    
+    // Draw dB scale labels on LEFT side (Pro-C 3 style) - every 6dB
+    // Labels are positioned using dbToY to align with grid lines
+    g.setFont(CustomLookAndFeel::getPluginFont(6.0f));
+    g.setColour(CustomLookAndFeel::getVeryDimTextColour());
+    
+    float dbLabels[] = { 0.0f, -6.0f, -12.0f, -18.0f, -24.0f, -30.0f, -36.0f };
+    for (float db : dbLabels)
+    {
+        // Use dbToY to ensure alignment with grid lines
+        float y = dbToY(db);
+        if (y > waveformArea.getY() + 4.0f && y < waveformArea.getBottom() - 4.0f)
+        {
+            g.drawText(juce::String(static_cast<int>(db)),
+                       static_cast<int>(scaleArea.getX() - 2),
+                       static_cast<int>(y - 4),
+                       static_cast<int>(scaleWidth),
+                       8,
+                       juce::Justification::centredRight);
+        }
+    }
+    
+    // Update peak hold values
+    if (inputDb > inputPeakHoldDb)
+    {
+        inputPeakHoldDb = inputDb;
+        inputPeakHoldCounter = peakHoldFrames;
+    }
+    else if (inputPeakHoldCounter > 0)
+    {
+        inputPeakHoldCounter--;
+    }
+    else
+    {
+        inputPeakHoldDb -= 0.5f;  // Decay
+        if (inputPeakHoldDb < -60.0f) inputPeakHoldDb = -100.0f;
+    }
+    
+    if (outputDb > outputPeakHoldDb)
+    {
+        outputPeakHoldDb = outputDb;
+        outputPeakHoldCounter = peakHoldFrames;
+    }
+    else if (outputPeakHoldCounter > 0)
+    {
+        outputPeakHoldCounter--;
+    }
+    else
+    {
+        outputPeakHoldDb -= 0.5f;  // Decay
+        if (outputPeakHoldDb < -60.0f) outputPeakHoldDb = -100.0f;
+    }
+    
+    // Helper to format dB value to max 3-4 chars (e.g., "-18", "-5.5", "-0.5")
+    auto formatDbShort = [](float db) -> juce::String {
+        if (db < -60.0f) return "-∞";
+        if (db >= -9.9f && db <= 0.0f)
+            return juce::String(db, 1);  // e.g., "-5.5"
+        else
+            return juce::String(static_cast<int>(std::round(db)));  // e.g., "-18"
+    };
+    
+    // Draw peak dB readouts at top (using Space Grotesk font)
+    g.setFont(CustomLookAndFeel::getPluginFont(10.0f, true));
+    
+    // Input peak dB readout (red text)
+    juce::String inputText = formatDbShort(inputPeakHoldDb);
+    g.setColour(juce::Colour(0xFFE05555).withAlpha(0.95f));
+    g.drawText(inputText, 
+               static_cast<int>(readoutArea.getX()), 
+               static_cast<int>(readoutArea.getY()),
+               static_cast<int>(meterWidth), 
+               static_cast<int>(readoutHeight),
+               juce::Justification::centred);
+    
+    // Output peak dB readout (green text)
+    juce::String outputText = formatDbShort(outputPeakHoldDb);
+    g.setColour(CustomLookAndFeel::getGainBoostColour().withAlpha(0.95f));
+    g.drawText(outputText, 
+               static_cast<int>(readoutArea.getX() + meterWidth + 3.0f), 
+               static_cast<int>(readoutArea.getY()),
+               static_cast<int>(meterWidth), 
+               static_cast<int>(readoutHeight),
+               juce::Justification::centred);
 }
 
 void WaveformDisplay::drawClippingIndicator(juce::Graphics& g)
