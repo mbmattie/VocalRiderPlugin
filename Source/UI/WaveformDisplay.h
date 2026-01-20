@@ -58,6 +58,13 @@ public:
     
     // Combined range setter (for backwards compat)
     void setRange(float rangeDb);
+    
+    // Waveform scroll speed (0.25 = slow, 0.5 = normal, 1.0 = fast)
+    void setScrollSpeed(float speed) { scrollSpeed = juce::jlimit(0.1f, 2.0f, speed); }
+    float getScrollSpeed() const { return scrollSpeed; }
+    
+    // Current gain for external access
+    void setCurrentGain(float gainDb) { currentGainDb = gainDb; }
     float getRange() const { return (boostRangeDb.load() + cutRangeDb.load()) / 2.0f; }
 
     // Callbacks for when user drags the handles
@@ -102,7 +109,8 @@ private:
     void drawBackground(juce::Graphics& g);
     void drawGridLines(juce::Graphics& g);
     void drawWaveform(juce::Graphics& g);
-    void drawGhostWaveform(juce::Graphics& g);
+    void drawGhostWaveform(juce::Graphics& g);  // Boost zones (drawn behind input)
+    void drawCutOverlay(juce::Graphics& g);      // Cut overlay (drawn in front of input)
     void drawGainCurve(juce::Graphics& g);
     void drawTargetAndRangeLines(juce::Graphics& g);
     void drawHandles(juce::Graphics& g);
@@ -118,7 +126,10 @@ private:
     // Areas
     juce::Rectangle<float> waveformArea;
     static constexpr int handleAreaWidth = 0;   // No left panel, but target/range lines are still draggable
-    static constexpr int ioMeterWidth = 55;     // Wider meters on right with dB scale
+    static constexpr int ioMeterWidth = 45;     // Narrower meters - transparent over waveform
+    
+    // Waveform scroll speed (1.0 = normal, 0.5 = half speed, 2.0 = double speed)
+    float scrollSpeed = 0.5f;  // Default to slower scrolling
     
     // Downsampling - lower value = higher resolution/fidelity
     float samplesPerPixel = 64.0f;
@@ -143,6 +154,21 @@ private:
     int inputPeakHoldCounter = 0;
     int outputPeakHoldCounter = 0;
     static constexpr int peakHoldFrames = 60;  // ~1 second at 60fps
+    
+    // RMS average for output meter
+    float outputRmsDb = -100.0f;
+    float rmsAccumulator = 0.0f;
+    int rmsSampleCount = 0;
+    
+    // Clip indicator hold (stays longer)
+    bool clipIndicatorActive = false;
+    int clipHoldCounter = 0;
+    static constexpr int clipHoldFrames = 180;  // ~3 seconds at 60fps
+    
+    // Current gain for gain meter
+    std::atomic<float> currentGainDb { 0.0f };
+    float gainPeakHoldDb = 0.0f;
+    int gainPeakHoldCounter = 0;
 
     // Drag state
     DragTarget currentDragTarget = DragTarget::None;

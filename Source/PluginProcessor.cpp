@@ -484,16 +484,16 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             }
             
             // Smoothly transition the phrase gain
-            float targetPhraseGain = inPhrase ? currentPhraseGainDb : silenceGainDb;
+            float targetPhraseGain = inPhrase ? currentPhraseGainDb : getSilenceGainDb();
             phraseGainSmoother = phraseGainSmoothCoeff * phraseGainSmoother + 
                                  (1.0f - phraseGainSmoothCoeff) * targetPhraseGain;
             
             targetGainDb = phraseGainSmoother;
             
-            // Don't boost silence
+            // Don't boost silence (apply smart silence reduction if enabled)
             if (!gateOpen)
             {
-                targetGainDb = juce::jmin(targetGainDb, silenceGainDb);
+                targetGainDb = juce::jmin(targetGainDb, getSilenceGainDb());
             }
         }
         else
@@ -544,10 +544,10 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             
             targetGainDb = juce::jlimit(-range, range, gainNeeded);
             
-            // Noise gate: Don't boost silence
+            // Noise gate: Apply smart silence reduction if enabled
             if (!gateOpen)
             {
-                targetGainDb = juce::jmin(targetGainDb, silenceGainDb);
+                targetGainDb = juce::jmin(targetGainDb, getSilenceGainDb());
             }
             
             if (effectiveLevelDb < gateThresholdDb - 10.0f)
@@ -691,6 +691,20 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
     }
 
+    // Apply output trim (makeup/reduction gain, -12 to +12 dB)
+    float trimGain = juce::Decibels::decibelsToGain(outputTrimDb.load());
+    if (std::abs(trimGain - 1.0f) > 0.001f)  // Only if trim is not unity
+    {
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            for (int channel = 0; channel < juce::jmin(totalNumInputChannels, 2); ++channel)
+            {
+                float* channelData = buffer.getWritePointer(channel);
+                channelData[sample] = softClip(channelData[sample] * trimGain);
+            }
+        }
+    }
+
     // Output samples for waveform
     std::vector<float> outputSamples(static_cast<size_t>(numSamples));
     for (int sample = 0; sample < numSamples; ++sample)
@@ -740,6 +754,7 @@ void VocalRiderAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty("useLufs", useLufsMode.load(), nullptr);
     state.setProperty("breathReduction", breathReductionDb.load(), nullptr);
     state.setProperty("transientPreservation", transientPreservation.load(), nullptr);
+    state.setProperty("outputTrim", outputTrimDb.load(), nullptr);
     state.setProperty("automationMode", static_cast<int>(automationMode.load()), nullptr);
     
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
@@ -772,6 +787,8 @@ void VocalRiderAudioProcessor::setStateInformation(const void* data, int sizeInB
             setBreathReduction(static_cast<float>(state.getProperty("breathReduction")));
         if (state.hasProperty("transientPreservation"))
             setTransientPreservation(static_cast<float>(state.getProperty("transientPreservation")));
+        if (state.hasProperty("outputTrim"))
+            setOutputTrim(static_cast<float>(state.getProperty("outputTrim")));
         if (state.hasProperty("automationMode"))
             setAutomationMode(static_cast<AutomationMode>(static_cast<int>(state.getProperty("automationMode"))));
     }

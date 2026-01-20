@@ -162,24 +162,24 @@ void CustomLookAndFeel::drawLargeKnob(juce::Graphics& g, juce::Rectangle<float> 
 {
     auto centreX = bounds.getCentreX();
     auto centreY = bounds.getCentreY();
-    auto radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) / 2.0f * 0.9f;
+    auto radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) / 2.0f * 0.92f;
     
     float angle = rotaryStartAngle + sliderPosProportional * (rotaryEndAngle - rotaryStartAngle);
     
     auto outerRadius = radius;
-    auto knobRadius = outerRadius * 0.72f;
+    auto knobRadius = outerRadius * 0.82f;  // Bigger inner knob (was 0.72)
     float arcRadius = (outerRadius + knobRadius) / 2.0f;
-    float arcThickness = (outerRadius - knobRadius) * 0.9f;  // Thicker to fill gap
+    float arcThickness = (outerRadius - knobRadius) * 0.85f;  // Thinner arc
     
     // FULLY OPAQUE circular background that covers the entire knob area
-    g.setColour(juce::Colour(0xFF0D0E11));  // Very dark, matches background
+    g.setColour(juce::Colour(0xFF0D0E11));
     g.fillEllipse(centreX - outerRadius, centreY - outerRadius, 
                   outerRadius * 2.0f, outerRadius * 2.0f);
     
-    // Outer ring - thin grey ring (brighter on hover)
+    // Outer ring - thinner grey ring (brighter on hover)
     g.setColour(isHovered ? juce::Colour(0xFF4A4D55) : juce::Colour(0xFF3A3D45));
     g.drawEllipse(centreX - outerRadius, centreY - outerRadius, 
-                  outerRadius * 2.0f, outerRadius * 2.0f, 1.5f);
+                  outerRadius * 2.0f, outerRadius * 2.0f, 1.0f);
     
     // Main knob body with gradient (darker top, lighter bottom)
     auto knobBounds = juce::Rectangle<float>(
@@ -187,19 +187,19 @@ void CustomLookAndFeel::drawLargeKnob(juce::Graphics& g, juce::Rectangle<float> 
         knobRadius * 2.0f, knobRadius * 2.0f
     );
     
-    // Arc groove background (darker ring between outer and inner)
+    // Arc groove background (thinner ring between outer and inner)
     juce::Path backgroundArc;
     backgroundArc.addCentredArc(centreX, centreY, arcRadius, arcRadius, 
                                  0.0f, rotaryStartAngle, rotaryEndAngle, true);
-    g.setColour(juce::Colour(0xFF151619));  // Dark groove
+    g.setColour(juce::Colour(0xFF151619));
     g.strokePath(backgroundArc, juce::PathStrokeType(arcThickness, 
                  juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     
     // Create gradient: darker grey at top, lighter grey at bottom
     juce::ColourGradient knobGradient(
-        juce::Colour(0xFF1E2028),  // Darker at top
+        juce::Colour(0xFF1E2028),
         centreX, centreY - knobRadius,
-        juce::Colour(0xFF353840),  // Lighter at bottom
+        juce::Colour(0xFF353840),
         centreX, centreY + knobRadius,
         false
     );
@@ -213,8 +213,8 @@ void CustomLookAndFeel::drawLargeKnob(juce::Graphics& g, juce::Rectangle<float> 
     // Hover glow effect
     if (isHovered)
     {
-        g.setColour(accentColour.withAlpha(0.08f));
-        g.fillEllipse(knobBounds.expanded(3.0f));
+        g.setColour(accentColour.withAlpha(0.06f));
+        g.fillEllipse(knobBounds.expanded(2.0f));
     }
     
     // Draw value arc with gradient
@@ -236,21 +236,22 @@ void CustomLookAndFeel::drawLargeKnob(juce::Graphics& g, juce::Rectangle<float> 
         );
         
         g.setGradientFill(arcGradient);
-        g.strokePath(valueArc, juce::PathStrokeType(arcThickness * 0.8f, 
+        g.strokePath(valueArc, juce::PathStrokeType(arcThickness * 0.75f,  // Thinner arc
                      juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
     
-    // Position indicator LINE - thin line from center toward edge (FabFilter style)
-    auto lineStartDist = knobRadius * 0.15f;   // Start near center
-    auto lineEndDist = knobRadius * 0.85f;     // End near edge of knob
+    // Position indicator LINE - THINNER line from center toward edge
+    auto lineStartDist = knobRadius * 0.2f;
+    auto lineEndDist = knobRadius * 0.8f;
     
     auto lineStartX = centreX + std::sin(angle) * lineStartDist;
     auto lineStartY = centreY - std::cos(angle) * lineStartDist;
     auto lineEndX = centreX + std::sin(angle) * lineEndDist;
     auto lineEndY = centreY - std::cos(angle) * lineEndDist;
     
-    g.setColour(accentColour);
-    g.drawLine(lineStartX, lineStartY, lineEndX, lineEndY, 1.8f);
+    // Subtle indicator line
+    g.setColour(accentColour.withAlpha(0.85f));
+    g.drawLine(lineStartX, lineStartY, lineEndX, lineEndY, 1.2f);
 }
 
 //==============================================================================
@@ -263,7 +264,7 @@ void CustomLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int wi
     auto bounds = juce::Rectangle<int>(x, y, width, height).toFloat();
     auto centreX = bounds.getCentreX();
     auto centreY = bounds.getCentreY();
-    auto radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) / 2.0f * 0.9f;
+    auto radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) / 2.0f * 0.92f;
     
     float angle = rotaryStartAngle + sliderPosProportional * (rotaryEndAngle - rotaryStartAngle);
     auto accentColour = getAccentColour();  // Purple accent
@@ -272,9 +273,9 @@ void CustomLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int wi
     bool isHovered = slider.isMouseOver();
     
     auto outerRadius = radius;
-    auto knobRadius = outerRadius * 0.72f;
+    auto knobRadius = outerRadius * 0.82f;  // Bigger inner knob (was 0.72)
     float arcRadius = (outerRadius + knobRadius) / 2.0f;
-    float arcThickness = (outerRadius - knobRadius) * 0.9f;  // Slightly thicker to fill gap
+    float arcThickness = (outerRadius - knobRadius) * 0.85f;  // Thinner arc
     
     // FULLY OPAQUE circular background that covers the entire knob area
     // This prevents the waveform from showing through the gap
@@ -282,10 +283,10 @@ void CustomLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int wi
     g.fillEllipse(centreX - outerRadius, centreY - outerRadius, 
                   outerRadius * 2.0f, outerRadius * 2.0f);
     
-    // Outer ring - thin grey ring (brighter on hover)
+    // Outer ring - thinner grey ring (brighter on hover)
     g.setColour(isHovered ? juce::Colour(0xFF4A4D55) : juce::Colour(0xFF3A3D45));
     g.drawEllipse(centreX - outerRadius, centreY - outerRadius, 
-                  outerRadius * 2.0f, outerRadius * 2.0f, 1.5f);
+                  outerRadius * 2.0f, outerRadius * 2.0f, 1.0f);
     
     // Arc groove background (darker ring between outer and inner)
     juce::Path backgroundArc;
@@ -346,17 +347,18 @@ void CustomLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int wi
                      juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
     
-    // Position indicator LINE - thin line from center toward edge (FabFilter style)
-    auto lineStartDist = knobRadius * 0.15f;   // Start near center
-    auto lineEndDist = knobRadius * 0.85f;     // End near edge of knob
+    // Position indicator LINE - THINNER line from center toward edge
+    auto lineStartDist = knobRadius * 0.2f;
+    auto lineEndDist = knobRadius * 0.8f;
     
     auto lineStartX = centreX + std::sin(angle) * lineStartDist;
     auto lineStartY = centreY - std::cos(angle) * lineStartDist;
     auto lineEndX = centreX + std::sin(angle) * lineEndDist;
     auto lineEndY = centreY - std::cos(angle) * lineEndDist;
     
-    g.setColour(accentColour);
-    g.drawLine(lineStartX, lineStartY, lineEndX, lineEndY, 1.5f);
+    // Subtle indicator line
+    g.setColour(accentColour.withAlpha(0.85f));
+    g.drawLine(lineStartX, lineStartY, lineEndX, lineEndY, 1.2f);
 }
 
 //==============================================================================
@@ -377,9 +379,13 @@ void CustomLookAndFeel::drawLabel(juce::Graphics& g, juce::Label& label)
     }
 }
 
-juce::Font CustomLookAndFeel::getLabelFont(juce::Label&)
+juce::Font CustomLookAndFeel::getLabelFont(juce::Label& label)
 {
-    return getPluginFont(11.0f);
+    // Respect the label's own font if it has been set to a non-default size
+    auto labelFont = label.getFont();
+    if (labelFont.getHeight() > 12.0f)  // If larger than default, use it
+        return labelFont;
+    return getPluginFont(11.0f);  // Default small font
 }
 
 //==============================================================================
@@ -423,6 +429,23 @@ void CustomLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& bu
 }
 
 //==============================================================================
+void CustomLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button,
+                                        bool /*shouldDrawButtonAsHighlighted*/, bool /*shouldDrawButtonAsDown*/)
+{
+    // Use plugin font for all button text
+    g.setFont(getPluginFont(12.0f, true));
+    
+    auto textColour = button.findColour(button.getToggleState() ? juce::TextButton::textColourOnId
+                                                                 : juce::TextButton::textColourOffId);
+    if (!button.isEnabled())
+        textColour = textColour.withAlpha(0.5f);
+    
+    g.setColour(textColour);
+    g.drawText(button.getButtonText(), button.getLocalBounds().reduced(4),
+               juce::Justification::centred);
+}
+
+//==============================================================================
 void CustomLookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, bool isButtonDown,
                                       int buttonX, int buttonY, int buttonW, int buttonH,
                                       juce::ComboBox&)
@@ -430,11 +453,22 @@ void CustomLookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, b
     auto cornerSize = 5.0f;
     auto bounds = juce::Rectangle<int>(0, 0, width, height).toFloat().reduced(1.0f);
     
-    g.setColour(isButtonDown ? getSurfaceDarkColour() : getSurfaceColour());
+    // Darker gray background
+    g.setColour(juce::Colour(0xFF2D3038));  // Darker gray
     g.fillRoundedRectangle(bounds, cornerSize);
     
-    g.setColour(getBorderColour());
-    g.drawRoundedRectangle(bounds, cornerSize, 0.5f);
+    // Subtle shine/highlight at top
+    juce::ColourGradient shine(
+        juce::Colours::white.withAlpha(0.06f), bounds.getX(), bounds.getY(),
+        juce::Colours::transparentWhite, bounds.getX(), bounds.getY() + bounds.getHeight() * 0.5f,
+        false
+    );
+    g.setGradientFill(shine);
+    g.fillRoundedRectangle(bounds, cornerSize);
+    
+    // Border - subtle
+    g.setColour(isButtonDown ? getAccentColour().withAlpha(0.5f) : juce::Colour(0xFF454550));
+    g.drawRoundedRectangle(bounds, cornerSize, 1.0f);
     
     // Arrow
     auto arrowZone = juce::Rectangle<int>(buttonX, buttonY, buttonW, buttonH).toFloat();
@@ -442,10 +476,80 @@ void CustomLookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, b
     auto arrowSize = 4.0f;
     arrow.addTriangle(arrowZone.getCentreX() - arrowSize, arrowZone.getCentreY() - 1.5f,
                       arrowZone.getCentreX() + arrowSize, arrowZone.getCentreY() - 1.5f,
-                      arrowZone.getCentreX(), arrowZone.getCentreY() + 2.5f);
+                      arrowZone.getCentreX(), arrowZone.getCentreY() + 3.0f);
     
-    g.setColour(getDimTextColour());
+    g.setColour(isButtonDown ? getAccentColour() : getDimTextColour().brighter(0.3f));
     g.fillPath(arrow);
+}
+
+//==============================================================================
+void CustomLookAndFeel::drawPopupMenuBackground(juce::Graphics& g, int width, int height)
+{
+    auto bounds = juce::Rectangle<int>(0, 0, width, height).toFloat();
+    
+    // Fill entire background first to avoid white corners
+    g.fillAll(juce::Colour(0xFF1A1C22));
+    
+    // Simple dark gradient background
+    juce::ColourGradient bgGrad(
+        juce::Colour(0xFF2A2D35), bounds.getX(), bounds.getY(),
+        juce::Colour(0xFF1A1C22), bounds.getX(), bounds.getBottom(),
+        false
+    );
+    g.setGradientFill(bgGrad);
+    g.fillRect(bounds);
+}
+
+void CustomLookAndFeel::drawPopupMenuItem(juce::Graphics& g, const juce::Rectangle<int>& area,
+                                           bool isSeparator, bool isActive, bool isHighlighted,
+                                           bool isTicked, bool /*hasSubMenu*/,
+                                           const juce::String& text, const juce::String& /*shortcutKeyText*/,
+                                           const juce::Drawable* /*icon*/, const juce::Colour* /*textColour*/)
+{
+    auto bounds = area.toFloat().reduced(4.0f, 1.0f);
+    
+    if (isSeparator)
+    {
+        g.setColour(getBorderColour().withAlpha(0.5f));
+        g.fillRect(bounds.getX() + 8.0f, bounds.getCentreY() - 0.5f, bounds.getWidth() - 16.0f, 1.0f);
+        return;
+    }
+    
+    if (isHighlighted && isActive)
+    {
+        // Simple highlight - subtle background
+        g.setColour(juce::Colour(0xFF3A3D45));
+        g.fillRoundedRectangle(bounds, 3.0f);
+    }
+    
+    // Text with consistent margin
+    g.setFont(getPluginFont(12.0f));
+    
+    // When ticked, highlight text in accent color
+    if (isTicked)
+        g.setColour(getAccentColour());
+    else
+        g.setColour(isActive ? (isHighlighted ? getTextColour() : getDimTextColour().brighter(0.2f)) 
+                             : getDimTextColour().withAlpha(0.4f));
+    
+    float textLeftMargin = 12.0f;
+    auto textBounds = bounds;
+    textBounds.setX(bounds.getX() + textLeftMargin);
+    textBounds.setWidth(bounds.getWidth() - textLeftMargin - 8.0f);
+    
+    if (isTicked)
+    {
+        // Subtle accent bar on left edge when selected
+        g.setColour(getAccentColour());
+        g.fillRoundedRectangle(bounds.getX() + 2.0f, bounds.getCentreY() - 6.0f, 2.0f, 12.0f, 1.0f);
+    }
+    
+    g.drawText(text, textBounds, juce::Justification::centredLeft);
+}
+
+juce::Font CustomLookAndFeel::getPopupMenuFont()
+{
+    return getPluginFont(12.0f);
 }
 
 //==============================================================================

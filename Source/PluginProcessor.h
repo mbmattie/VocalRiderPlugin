@@ -73,6 +73,7 @@ public:
     float getInputLevelDb() const { return inputLevelDb.load(); }
     float getOutputLevelDb() const { return outputLevelDb.load(); }
     float getGainReductionDb() const { return currentGainDb.load(); }
+    float getCurrentGainDb() const { return currentGainDb.load(); }
     float getInputLufs() const { return inputLufs.load(); }
 
     // Waveform display
@@ -98,6 +99,15 @@ public:
     void setNaturalModeEnabled(bool enabled);
     bool isNaturalModeEnabled() const { return naturalModeEnabled.load(); }
     
+    // Smart Silence (silence reduction)
+    void setSmartSilenceEnabled(bool enabled) { smartSilenceEnabled.store(enabled); }
+    bool isSmartSilenceEnabled() const { return smartSilenceEnabled.load(); }
+    
+    // Learning mode (auto-analyze voice)
+    void startLearning() { isLearning.store(true); learningSamples = 0; }
+    void stopLearning() { isLearning.store(false); }
+    bool getIsLearning() const { return isLearning.load(); }
+    
     // LUFS mode (vs RMS)
     void setUseLufs(bool useLufs);
     bool getUseLufs() const { return useLufsMode.load(); }
@@ -109,6 +119,10 @@ public:
     // Transient preservation
     void setTransientPreservation(float amount);  // 0.0 = off, 1.0 = full
     float getTransientPreservation() const { return transientPreservation.load(); }
+    
+    // Output trim (makeup gain)
+    void setOutputTrim(float trimDb) { outputTrimDb.store(juce::jlimit(-12.0f, 12.0f, trimDb)); }
+    float getOutputTrim() const { return outputTrimDb.load(); }
     
     // Automation write mode
     void setAutomationMode(AutomationMode mode);
@@ -194,9 +208,12 @@ private:
     // Noise gate parameters
     static constexpr float gateThresholdDb = -45.0f;
     static constexpr float gateHysteresisDb = 3.0f;
-    static constexpr float silenceGainDb = -6.0f;
+    static constexpr float silenceGainDbReduction = -6.0f;  // When smart silence is ON
     bool gateOpen = false;
     float gateSmoothedLevel = -100.0f;
+    
+    // Smart Silence helper
+    float getSilenceGainDb() const { return smartSilenceEnabled.load() ? silenceGainDbReduction : 0.0f; }
     
     // Soft knee parameters
     static constexpr float kneeWidthDb = 6.0f;
@@ -204,6 +221,14 @@ private:
     //==============================================================================
     // Phrase-based processing (Natural Mode)
     std::atomic<bool> naturalModeEnabled { false };
+    
+    // Smart Silence
+    std::atomic<bool> smartSilenceEnabled { false };
+    
+    // Learning mode
+    std::atomic<bool> isLearning { false };
+    int learningSamples = 0;
+    float learningPeakSum = 0.0f;
     
     bool inPhrase = false;
     float phraseAccumulator = 0.0f;
@@ -239,6 +264,10 @@ private:
     //==============================================================================
     // Transient preservation
     std::atomic<float> transientPreservation { 0.0f };  // 0.0 = off, 1.0 = full
+    
+    //==============================================================================
+    // Output trim (makeup gain)
+    std::atomic<float> outputTrimDb { 0.0f };  // -12 to +12 dB
     
     //==============================================================================
     // Automation write

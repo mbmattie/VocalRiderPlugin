@@ -34,33 +34,60 @@ public:
     void drawLabel(juce::Graphics& g, juce::Label& label) override;
     juce::Font getLabelFont(juce::Label& label) override;
     
-    // Plugin-wide font
+    // Plugin-wide fonts
     static juce::String getFontName() { return "Space Grotesk"; }
+    static juce::String getBrandFontName() { return "Syne"; }  // For MBM Audio branding
+    
     static juce::Font getPluginFont(float size, bool bold = false) 
     { 
         return juce::Font(juce::FontOptions(getFontName(), size, bold ? juce::Font::bold : juce::Font::plain));
+    }
+    
+    static juce::Font getBrandFont(float size, bool bold = true) 
+    { 
+        return juce::Font(juce::FontOptions(getBrandFontName(), size, bold ? juce::Font::bold : juce::Font::plain));
     }
 
     void drawButtonBackground(juce::Graphics& g, juce::Button& button,
                               const juce::Colour& backgroundColour,
                               bool shouldDrawButtonAsHighlighted,
                               bool shouldDrawButtonAsDown) override;
+    
+    void drawButtonText(juce::Graphics& g, juce::TextButton& button,
+                        bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
 
     void drawComboBox(juce::Graphics& g, int width, int height, bool isButtonDown,
                       int buttonX, int buttonY, int buttonW, int buttonH,
                       juce::ComboBox& box) override;
+    
+    juce::Font getComboBoxFont(juce::ComboBox&) override { return getPluginFont(12.0f); }
+    
+    void positionComboBoxText(juce::ComboBox& box, juce::Label& label) override
+    {
+        label.setBounds(8, 1, box.getWidth() - 24, box.getHeight() - 2);
+        label.setFont(getPluginFont(12.0f));
+    }
 
     void drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
                           bool shouldDrawButtonAsHighlighted,
                           bool shouldDrawButtonAsDown) override;
+    
+    // Popup menu styling
+    void drawPopupMenuBackground(juce::Graphics& g, int width, int height) override;
+    void drawPopupMenuItem(juce::Graphics& g, const juce::Rectangle<int>& area,
+                          bool isSeparator, bool isActive, bool isHighlighted,
+                          bool isTicked, bool hasSubMenu,
+                          const juce::String& text, const juce::String& shortcutKeyText,
+                          const juce::Drawable* icon, const juce::Colour* textColour) override;
+    juce::Font getPopupMenuFont() override;
 
     //==========================================================================
     // Dark High-Contrast Color Palette
     
-    // Base colors - very dark with high contrast
-    static juce::Colour getBackgroundColour()      { return juce::Colour(0xFF16181C); }  // Near black
-    static juce::Colour getSurfaceColour()         { return juce::Colour(0xFF1E2026); }  // Dark surface
-    static juce::Colour getSurfaceLightColour()    { return juce::Colour(0xFF2A2D35); }  // Highlight
+    // Base colors - lighter gray for prominent vignette effect
+    static juce::Colour getBackgroundColour()      { return juce::Colour(0xFF252830); }  // Medium gray
+    static juce::Colour getSurfaceColour()         { return juce::Colour(0xFF2C3038); }  // Slightly lighter surface
+    static juce::Colour getSurfaceLightColour()    { return juce::Colour(0xFF3A3F4A); }  // Highlight
     static juce::Colour getSurfaceDarkColour()     { return juce::Colour(0xFF0D0E11); }  // Deep shadow
     static juce::Colour getBorderColour()          { return juce::Colour(0xFF2E3138); }  // Subtle border
     
@@ -81,10 +108,10 @@ public:
     static juce::Colour getWaveformColour()        { return juce::Colour(0xFF5BC4D4); }  // Cyan
     static juce::Colour getWaveformDimColour()     { return juce::Colour(0xFF2A5560); }  // Dim cyan
     static juce::Colour getGainCurveColour()       { return juce::Colour(0xFF5BC4D4); }  // Cyan curve
-    static juce::Colour getGainBoostColour()       { return juce::Colour(0xFF5BCFEF); }  // Bright cyan (boost)
-    static juce::Colour getGainCutColour()         { return juce::Colour(0xFF6B7AAD); }  // Blue-grey/purple (cut)
-    static juce::Colour getTargetLineColour()      { return juce::Colour(0xFFE8C547); }  // Yellow/gold
-    static juce::Colour getRangeLineColour()       { return juce::Colour(0xFFB48EFF); }  // Purple
+    static juce::Colour getGainBoostColour()       { return juce::Colour(0xFF7AC5D4); }  // Desaturated cyan (boost range)
+    static juce::Colour getGainCutColour()         { return juce::Colour(0xFF9A8BC0); }  // Desaturated purple (cut range)
+    static juce::Colour getTargetLineColour()      { return juce::Colour(0xFF8AC4DA); }  // More saturated cyan-purple blend
+    static juce::Colour getRangeLineColour()       { return juce::Colour(0xFF8A7AAA); }  // Desaturated purple for range
     
     // Status colors
     static juce::Colour getWarningColour()         { return juce::Colour(0xFFE87B7B); }

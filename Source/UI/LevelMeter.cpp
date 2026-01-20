@@ -163,7 +163,8 @@ void LevelMeter::timerCallback()
         }
         else
         {
-            peakLevelDb -= 0.5f;
+            // Slower fall for more premium feel
+            peakLevelDb -= 0.15f;
             peakLevelDb = juce::jmax(peakLevelDb, minDb);
         }
     }
