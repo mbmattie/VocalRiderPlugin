@@ -107,11 +107,11 @@ public:
     // Waveform and visualization colors
     static juce::Colour getWaveformColour()        { return juce::Colour(0xFF5BC4D4); }  // Cyan
     static juce::Colour getWaveformDimColour()     { return juce::Colour(0xFF2A5560); }  // Dim cyan
-    static juce::Colour getGainCurveColour()       { return juce::Colour(0xFF5BC4D4); }  // Cyan curve
-    static juce::Colour getGainBoostColour()       { return juce::Colour(0xFF7AC5D4); }  // Desaturated cyan (boost range)
-    static juce::Colour getGainCutColour()         { return juce::Colour(0xFF9A8BC0); }  // Desaturated purple (cut range)
-    static juce::Colour getTargetLineColour()      { return juce::Colour(0xFF8AC4DA); }  // More saturated cyan-purple blend
-    static juce::Colour getRangeLineColour()       { return juce::Colour(0xFF8A7AAA); }  // Desaturated purple for range
+    static juce::Colour getGainCurveColour()       { return juce::Colour(0xFFB48EFF); }  // Purple gain curve
+    static juce::Colour getGainBoostColour()       { return juce::Colour(0xFF6A90B8); }  // Desaturated blue (top range)
+    static juce::Colour getGainCutColour()         { return juce::Colour(0xFF9A7BC0); }  // Desaturated purple (bottom range/cut)
+    static juce::Colour getTargetLineColour()      { return juce::Colour(0xFFB48EFF); }  // Saturated purple (middle target line)
+    static juce::Colour getRangeLineColour()       { return juce::Colour(0xFF7A6A9A); }  // Dimmer purple for range lines
     
     // Status colors
     static juce::Colour getWarningColour()         { return juce::Colour(0xFFE87B7B); }

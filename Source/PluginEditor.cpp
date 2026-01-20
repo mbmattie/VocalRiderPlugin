@@ -257,10 +257,11 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     autoTargetButton.onClick = [this] {
         if (!autoTargetButton.getToggleState()) {
             autoTargetButton.setToggleState(true, juce::dontSendNotification);
-            learnCountdown = 180;  // 3 seconds at 60Hz (faster analysis)
-            // Reset learning stats
-            learnMinDb = 0.0f;
-            learnMaxDb = -100.0f;
+            autoTargetButton.setPulsing(true);  // Start pulsing animation
+            learnCountdown = 180;  // 3 seconds at 60Hz
+            // Reset learning stats - min starts HIGH so actual audio is captured
+            learnMinDb = 6.0f;     // Start high - actual audio will be lower
+            learnMaxDb = -100.0f;  // Start low - actual audio will be higher
             learnSumDb = 0.0f;
             learnSampleCount = 0;
         }
@@ -1100,7 +1101,7 @@ void VocalRiderAudioProcessorEditor::resized()
     }
     
     // Waveform fills area below header and above bottom bar (transparent control area)
-    auto waveformBounds = getLocalBounds().withTrimmedTop(36).withTrimmedBottom(bottomBarHeight);
+    auto waveformBounds = getLocalBounds().withTrimmedTop(headerHeight).withTrimmedBottom(bottomBarHeight);
     waveformDisplay.setBounds(waveformBounds);
     
     // Control panel contents - PROPORTIONALLY BIGGER knobs for -60dB range
@@ -1169,9 +1170,9 @@ void VocalRiderAudioProcessorEditor::timerCallback()
     {
         learnCountdown--;
         
-        // Collect level data
+        // Collect level data - use a threshold to avoid counting silence/noise
         float inputDb = audioProcessor.getInputLevelDb();
-        if (inputDb > -60.0f)  // Only count actual audio
+        if (inputDb > -55.0f)  // Only count actual audio above noise floor
         {
             if (inputDb < learnMinDb) learnMinDb = inputDb;
             if (inputDb > learnMaxDb) learnMaxDb = inputDb;
@@ -1181,32 +1182,45 @@ void VocalRiderAudioProcessorEditor::timerCallback()
         
         if (learnCountdown == 0)
         {
+            // Stop button state and pulsing animation
             autoTargetButton.setToggleState(false, juce::dontSendNotification);
+            autoTargetButton.setPulsing(false);
             
-            // Calculate and apply learned values
-            if (learnSampleCount > 30)  // Need enough samples
+            // Calculate and apply learned values - need at least 5 samples
+            if (learnSampleCount >= 5)
             {
                 float avgDb = learnSumDb / static_cast<float>(learnSampleCount);
                 float dynamicRange = learnMaxDb - learnMinDb;
                 
-                // Set target to average level
+                // Ensure we have a valid dynamic range
+                if (dynamicRange < 3.0f) dynamicRange = 6.0f;
+                
+                // Set target to average level (where vocal typically sits)
                 float targetLevel = juce::jlimit(-40.0f, -6.0f, avgDb);
                 if (auto* param = audioProcessor.getApvts().getParameter("targetLevel"))
                     param->setValueNotifyingHost(param->convertTo0to1(targetLevel));
                 
-                // Set range based on dynamic range (half of dynamic range, clamped)
-                float range = juce::jlimit(3.0f, 18.0f, dynamicRange / 2.0f);
+                // Set range based on dynamic range (covers about 60% of measured range)
+                float range = juce::jlimit(3.0f, 15.0f, dynamicRange * 0.6f);
                 if (auto* param = audioProcessor.getApvts().getParameter("range"))
                     param->setValueNotifyingHost(param->convertTo0to1(range));
                 
-                // Set speed based on how "jumpy" the audio is
-                // More dynamic range = slower speed to be smoother
-                float speed = juce::jmap(dynamicRange, 6.0f, 24.0f, 70.0f, 30.0f);
+                // Set speed based on dynamic range
+                // More dynamic = slower speed to be smoother, less pumpy
+                float speed = juce::jmap(dynamicRange, 6.0f, 24.0f, 60.0f, 30.0f);
                 speed = juce::jlimit(20.0f, 80.0f, speed);
                 if (auto* param = audioProcessor.getApvts().getParameter("speed"))
                     param->setValueNotifyingHost(param->convertTo0to1(speed));
+                    
+                // Also update the UI sliders immediately
+                updateAdvancedControls();
             }
         }
+    }
+    else if (!autoTargetButton.getToggleState() && autoTargetButton.getPulsing())
+    {
+        // Ensure pulsing is stopped if button is manually turned off
+        autoTargetButton.setPulsing(false);
     }
     
     // Hide tooltip when no slider is being interacted with

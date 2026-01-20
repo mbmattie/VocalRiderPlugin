@@ -656,8 +656,6 @@ void WaveformDisplay::drawGhostWaveform(juce::Graphics& g)
     int currentWrite = writeIndex.load();
     int bufferSize = static_cast<int>(displayBuffer.size());
     
-    if (!hasActiveAudio) return;
-    
     // Draw BOOST zones (teal) - these go BEHIND the input waveform
     for (int i = 0; i < bufferSize; ++i)
     {
@@ -698,14 +696,12 @@ void WaveformDisplay::drawGhostWaveform(juce::Graphics& g)
 void WaveformDisplay::drawCutOverlay(juce::Graphics& g)
 {
     // CUT visualization - drawn AFTER input waveform so it appears IN FRONT
-    // Shows the output (reduced) waveform as a darker overlay on top of the input
+    // Shows the output (reduced) waveform as a distinct overlay on top of the input
     
     juce::SpinLock::ScopedLockType lock(bufferLock);
     
     int currentWrite = writeIndex.load();
     int bufferSize = static_cast<int>(displayBuffer.size());
-    
-    if (!hasActiveAudio) return;
     
     // Draw the cut/output waveform as a FILLED area (darker, in front)
     // This shows where the output ends up when gain is reduced
@@ -754,20 +750,20 @@ void WaveformDisplay::drawCutOverlay(juce::Graphics& g)
     
     if (hasCutSamples)
     {
-        // Draw the cut output waveform as a darker filled shape IN FRONT of the input
-        // Use a semi-transparent dark color to show "this is where the output is now"
+        // Draw the cut output waveform with warm coral-red tint for visibility
+        // Shows clearly where gain reduction is happening
         juce::ColourGradient cutGrad(
-            juce::Colour(0xFF606878).withAlpha(0.65f),  // Darker at top
+            CustomLookAndFeel::getGainCutColour().withAlpha(0.55f),  // Warm coral at top
             waveformArea.getX(), waveformArea.getY() + waveformArea.getHeight() * 0.3f,
-            juce::Colour(0xFF404550).withAlpha(0.45f),  // Slightly lighter at bottom
+            CustomLookAndFeel::getGainCutColour().darker(0.4f).withAlpha(0.35f),  // Darker at bottom
             waveformArea.getX(), waveformArea.getBottom(),
             false
         );
         g.setGradientFill(cutGrad);
         g.fillPath(cutOutputPath);
         
-        // Subtle outline on the cut output waveform
-        g.setColour(juce::Colour(0xFF505560).withAlpha(0.5f));
+        // Distinct outline on the cut output waveform
+        g.setColour(CustomLookAndFeel::getGainCutColour().withAlpha(0.7f));
         
         // Create outline path (just the top edge)
         juce::Path outlinePath;
@@ -794,7 +790,7 @@ void WaveformDisplay::drawCutOverlay(juce::Graphics& g)
             }
         }
         
-        g.strokePath(outlinePath, juce::PathStrokeType(1.5f, juce::PathStrokeType::curved,
+        g.strokePath(outlinePath, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved,
                                                         juce::PathStrokeType::rounded));
     }
 }
@@ -808,12 +804,8 @@ void WaveformDisplay::drawWaveform(juce::Graphics& g)
     int currentWrite = writeIndex.load();
     int bufferSize = static_cast<int>(displayBuffer.size());
     
-    // Color depends on audio activity
-    // When no audio: very dark grey (almost black)
-    // When audio playing: light grey for waveform
-    juce::Colour waveformGrey = hasActiveAudio 
-        ? juce::Colour(0xFFB8BCC5)   // Light grey when active
-        : juce::Colour(0xFF252830);  // Very dark when no audio
+    // White/light grey waveform - always visible, scrolls continuously like Pro-C
+    juce::Colour waveformGrey(0xFFB8BCC5);  // Light grey - consistent regardless of audio activity
     
     juce::Path waveformPath;
     bool pathStarted = false;
@@ -839,41 +831,37 @@ void WaveformDisplay::drawWaveform(juce::Graphics& g)
     waveformPath.closeSubPath();
     
     // Draw gain indication background (green for boost, red for cut)
-    // Very subtle tints - only show when audio is active
-    if (hasActiveAudio)
+    // Very subtle tints - always visible
+    for (int i = 0; i < bufferSize; ++i)
     {
-        for (int i = 0; i < bufferSize; ++i)
+        int bufIdx = (currentWrite + i) % bufferSize;
+        const auto& sample = displayBuffer[static_cast<size_t>(bufIdx)];
+        
+        float x = waveformArea.getX() + (static_cast<float>(i) / static_cast<float>(bufferSize)) * waveformArea.getWidth();
+        float nextX = waveformArea.getX() + (static_cast<float>(i + 1) / static_cast<float>(bufferSize)) * waveformArea.getWidth();
+        float sliceWidth = nextX - x;
+        
+        // Gain in dB - positive is boost, negative is cut
+        float gainDb = sample.gainDb;
+        
+        if (gainDb > 0.5f)  // Boosting
         {
-            int bufIdx = (currentWrite + i) % bufferSize;
-            const auto& sample = displayBuffer[static_cast<size_t>(bufIdx)];
-            
-            float x = waveformArea.getX() + (static_cast<float>(i) / static_cast<float>(bufferSize)) * waveformArea.getWidth();
-            float nextX = waveformArea.getX() + (static_cast<float>(i + 1) / static_cast<float>(bufferSize)) * waveformArea.getWidth();
-            float sliceWidth = nextX - x;
-            
-            // Gain in dB - positive is boost, negative is cut
-            float gainDb = sample.gainDb;
-            
-            if (gainDb > 0.5f)  // Boosting
-            {
-                float intensity = juce::jmin(gainDb / 12.0f, 1.0f);  // Normalize to 0-1
-                // Very subtle - max alpha of 0.08
-                g.setColour(CustomLookAndFeel::getGainBoostColour().withAlpha(intensity * 0.08f));
-                g.fillRect(x, waveformArea.getY(), sliceWidth + 1.0f, waveformArea.getHeight());
-            }
-            else if (gainDb < -0.5f)  // Cutting
-            {
-                float intensity = juce::jmin(-gainDb / 12.0f, 1.0f);  // Normalize to 0-1
-                // Very subtle - max alpha of 0.08
-                g.setColour(CustomLookAndFeel::getGainCutColour().withAlpha(intensity * 0.08f));
-                g.fillRect(x, waveformArea.getY(), sliceWidth + 1.0f, waveformArea.getHeight());
-            }
+            float intensity = juce::jmin(gainDb / 12.0f, 1.0f);  // Normalize to 0-1
+            // Very subtle - max alpha of 0.08
+            g.setColour(CustomLookAndFeel::getGainBoostColour().withAlpha(intensity * 0.08f));
+            g.fillRect(x, waveformArea.getY(), sliceWidth + 1.0f, waveformArea.getHeight());
+        }
+        else if (gainDb < -0.5f)  // Cutting
+        {
+            float intensity = juce::jmin(-gainDb / 12.0f, 1.0f);  // Normalize to 0-1
+            // Very subtle - max alpha of 0.08
+            g.setColour(CustomLookAndFeel::getGainCutColour().withAlpha(intensity * 0.08f));
+            g.fillRect(x, waveformArea.getY(), sliceWidth + 1.0f, waveformArea.getHeight());
         }
     }
     
-    // Waveform fill - opacity depends on activity
-    // Gradient goes from TOP of waveform area to BOTTOM for smooth fade
-    float waveformAlpha = hasActiveAudio ? 0.7f : 0.15f;
+    // Waveform fill - consistent opacity (scrolls continuously like Pro-C/FL Studio)
+    float waveformAlpha = 0.7f;
     juce::ColourGradient waveGradient(
         waveformGrey.withAlpha(waveformAlpha),  // Full alpha at top
         waveformArea.getX(), waveformArea.getY(),  // Start at TOP
@@ -902,26 +890,23 @@ void WaveformDisplay::drawWaveform(juce::Graphics& g)
         outlinePath.lineTo(x, y);
     }
     
-    // Outline with subtle glow - only prominent when active
-    float outlineAlpha = hasActiveAudio ? 0.25f : 0.08f;
-    g.setColour(waveformGrey.withAlpha(outlineAlpha));
+    // Outline with subtle glow - consistent
+    g.setColour(waveformGrey.withAlpha(0.25f));
     g.strokePath(outlinePath, juce::PathStrokeType(2.5f, juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
     
     // Main outline
-    g.setColour(waveformGrey.withAlpha(hasActiveAudio ? 0.6f : 0.1f));
+    g.setColour(waveformGrey.withAlpha(0.6f));
     g.strokePath(outlinePath, juce::PathStrokeType(1.5f, juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
 }
 
 void WaveformDisplay::drawGainCurve(juce::Graphics& g)
 {
-    // Fade in/out based on audio activity
-    float targetOpacity = hasActiveAudio ? 1.0f : 0.0f;
+    // Gain curve always visible - continuous scrolling like Pro-C/FL Studio
+    // Just slightly fade when no recent audio activity, but never disappear
+    float targetOpacity = hasActiveAudio ? 1.0f : 0.6f;
     gainCurveOpacity += (targetOpacity - gainCurveOpacity) * 0.1f;
-    
-    if (gainCurveOpacity < 0.01f)
-        return;
     
     juce::SpinLock::ScopedLockType lock(bufferLock);
     
