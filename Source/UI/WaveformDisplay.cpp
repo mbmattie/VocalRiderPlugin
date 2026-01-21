@@ -425,8 +425,8 @@ void WaveformDisplay::drawBackground(juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat();
     
-    // Lighter gray background
-    g.setColour(juce::Colour(0xFF282C34));
+    // Background with good contrast for waveform visibility
+    g.setColour(juce::Colour(0xFF252830));  // Balanced - not too dark, not too light
     g.fillRect(bounds);
     
     // Subtle noise/grain texture for brushed metal feel
@@ -599,40 +599,38 @@ void WaveformDisplay::drawTargetAndRangeLines(juce::Graphics& g)
                static_cast<int>(boostY - 16), 
                60, 14, juce::Justification::centredLeft);
     
-    // Cut range line (dashed, purple tint) with fade
+    // Cut range line (dashed, muted gray to match boost line) with fade
     for (float x = waveformArea.getX(); x < waveformArea.getRight(); x += 10.0f)
     {
         float alpha = getAlphaAtX(x) * 0.5f;
-        g.setColour(CustomLookAndFeel::getGainCutColour().withAlpha(alpha));
+        g.setColour(CustomLookAndFeel::getGainBoostColour().withAlpha(alpha));  // Same muted gray as boost
         g.drawLine(x, cutY, juce::jmin(x + 6.0f, waveformArea.getRight()), cutY, 1.0f);
     }
     
     // Cut range label - BIGGER and more legible
-    g.setColour(CustomLookAndFeel::getGainCutColour().withAlpha(0.9f));
+    g.setColour(CustomLookAndFeel::getGainBoostColour().withAlpha(0.9f));  // Same muted gray as boost
     g.drawText("-" + juce::String(static_cast<int>(cut)) + " dB", 
                static_cast<int>(waveformArea.getX() + 8), 
                static_cast<int>(cutY + 3), 
                60, 14, juce::Justification::centredLeft);
     
-    // Target line (solid, gold) with fade at right
+    // Target line with gradient matching knob outline (light purple to dark purple) - 2px
+    juce::Colour targetLightPurple(0xFFD4B8FF);  // Light purple (matches knob gradient)
+    juce::Colour targetDarkPurple(0xFF7B5CAD);    // Dark purple (matches knob gradient)
+    float lineWidth = waveformArea.getWidth();
     for (float x = waveformArea.getX(); x < waveformArea.getRight(); x += 2.0f)
     {
         float alpha = getAlphaAtX(x);
-        g.setColour(CustomLookAndFeel::getTargetLineColour().withAlpha(alpha));
+        float gradientPos = (x - waveformArea.getX()) / lineWidth;
+        juce::Colour gradientColour = targetLightPurple.interpolatedWith(targetDarkPurple, gradientPos);
+        g.setColour(gradientColour.withAlpha(alpha));
         g.drawLine(x, targetY, juce::jmin(x + 2.0f, waveformArea.getRight()), targetY, 2.0f);
     }
     
-    // Target glow with fade
-    for (float x = waveformArea.getX(); x < waveformArea.getRight(); x += 4.0f)
-    {
-        float alpha = getAlphaAtX(x) * 0.15f;
-        g.setColour(CustomLookAndFeel::getTargetLineColour().withAlpha(alpha));
-        g.drawLine(x, targetY, juce::jmin(x + 4.0f, waveformArea.getRight()), targetY, 6.0f);
-    }
-    
-    // Target label - BIGGER and more legible
+    // Target label with gradient effect - use middle color
     g.setFont(CustomLookAndFeel::getPluginFont(11.0f, true));
-    g.setColour(CustomLookAndFeel::getTargetLineColour().withAlpha(0.95f));
+    juce::Colour labelColour = targetLightPurple.interpolatedWith(targetDarkPurple, 0.3f);
+    g.setColour(labelColour.withAlpha(0.95f));
     g.drawText(juce::String(static_cast<int>(target)) + " dB", 
                static_cast<int>(waveformArea.getX() + 8), 
                static_cast<int>(targetY - 16), 
@@ -709,6 +707,10 @@ void WaveformDisplay::drawCutOverlay(juce::Graphics& g)
     bool pathStarted = false;
     float baseY = waveformArea.getBottom();
     bool hasCutSamples = false;
+    float lastY = baseY;
+    float lastX = 0.0f;
+    
+    float prevOutputPeak = 0.0f;
     
     for (int i = 0; i < bufferSize; ++i)
     {
@@ -716,35 +718,69 @@ void WaveformDisplay::drawCutOverlay(juce::Graphics& g)
         const auto& sample = displayBuffer[static_cast<size_t>(bufIdx)];
         
         float gainDb = sample.gainDb;
+        float x = waveformArea.getX() + (static_cast<float>(i) / static_cast<float>(bufferSize)) * waveformArea.getWidth();
         
         // Only draw output waveform for cut regions
         if (gainDb < -0.3f && sample.outputPeak > 0.0001f)
         {
             hasCutSamples = true;
-            float x = waveformArea.getX() + (static_cast<float>(i) / static_cast<float>(bufferSize)) * waveformArea.getWidth();
             float y = linearToLogY(sample.outputPeak);
+            
+            // Check if coming back from silence - this can cause diagonal lines
+            bool comingFromSilence = prevOutputPeak < 0.001f && pathStarted;
             
             if (!pathStarted)
             {
                 cutOutputPath.startNewSubPath(x, baseY);
+                cutOutputPath.lineTo(x, y);
                 pathStarted = true;
             }
-            cutOutputPath.lineTo(x, y);
+            else if (comingFromSilence)
+            {
+                // Close previous section and start new one to avoid diagonal line
+                cutOutputPath.lineTo(lastX, baseY);
+                cutOutputPath.closeSubPath();
+                cutOutputPath.startNewSubPath(x, baseY);
+                cutOutputPath.lineTo(x, y);
+            }
+            else
+            {
+                // Check for large vertical jumps - add vertical line first to avoid diagonal
+                float yDiff = std::abs(y - lastY);
+                if (yDiff > waveformArea.getHeight() * 0.3f)
+                {
+                    // Large jump - draw vertical line first
+                    cutOutputPath.lineTo(x, lastY);
+                    cutOutputPath.lineTo(x, y);
+                }
+                else
+                {
+                    cutOutputPath.lineTo(x, y);
+                }
+            }
+            lastY = y;
+            lastX = x;
+            prevOutputPeak = sample.outputPeak;
         }
         else if (pathStarted)
         {
-            // Close this cut section
-            float x = waveformArea.getX() + (static_cast<float>(i) / static_cast<float>(bufferSize)) * waveformArea.getWidth();
-            cutOutputPath.lineTo(x, baseY);
+            // Close this cut section - go down to baseline first
+            cutOutputPath.lineTo(lastX, baseY);
             cutOutputPath.closeSubPath();
             pathStarted = false;
+            lastY = baseY;
+            prevOutputPeak = 0.0f;
+        }
+        else
+        {
+            prevOutputPeak = sample.outputPeak;  // Track even when not drawing
         }
     }
     
     // Close if still open
     if (pathStarted)
     {
-        cutOutputPath.lineTo(waveformArea.getRight(), baseY);
+        cutOutputPath.lineTo(lastX, baseY);
         cutOutputPath.closeSubPath();
     }
     
@@ -765,9 +801,12 @@ void WaveformDisplay::drawCutOverlay(juce::Graphics& g)
         // Distinct outline on the cut output waveform
         g.setColour(CustomLookAndFeel::getGainCutColour().withAlpha(0.7f));
         
-        // Create outline path (just the top edge)
+        // Create outline path (just the top edge) - handle discontinuities
         juce::Path outlinePath;
         bool outlineStarted = false;
+        float lastOutlineY = 0.0f;
+        float lastOutlinePeak = 0.0f;
+        
         for (int i = 0; i < bufferSize; ++i)
         {
             int bufIdx = (currentWrite + i) % bufferSize;
@@ -778,15 +817,31 @@ void WaveformDisplay::drawCutOverlay(juce::Graphics& g)
                 float x = waveformArea.getX() + (static_cast<float>(i) / static_cast<float>(bufferSize)) * waveformArea.getWidth();
                 float y = linearToLogY(sample.outputPeak);
                 
+                // Check for discontinuity (large jump after silence)
+                bool isDiscontinuity = outlineStarted && 
+                    (lastOutlinePeak < 0.001f || std::abs(y - lastOutlineY) > waveformArea.getHeight() * 0.4f);
+                
                 if (!outlineStarted)
                 {
                     outlinePath.startNewSubPath(x, y);
                     outlineStarted = true;
                 }
+                else if (isDiscontinuity)
+                {
+                    // Start a new subpath to avoid diagonal lines across discontinuities
+                    outlinePath.startNewSubPath(x, y);
+                }
                 else
                 {
                     outlinePath.lineTo(x, y);
                 }
+                lastOutlineY = y;
+                lastOutlinePeak = sample.outputPeak;
+            }
+            else
+            {
+                // Mark that we went through silence
+                lastOutlinePeak = 0.0f;
             }
         }
         
@@ -903,10 +958,14 @@ void WaveformDisplay::drawWaveform(juce::Graphics& g)
 
 void WaveformDisplay::drawGainCurve(juce::Graphics& g)
 {
-    // Gain curve always visible - continuous scrolling like Pro-C/FL Studio
-    // Just slightly fade when no recent audio activity, but never disappear
-    float targetOpacity = hasActiveAudio ? 1.0f : 0.6f;
-    gainCurveOpacity += (targetOpacity - gainCurveOpacity) * 0.1f;
+    // Gain curve fades away when no audio is playing
+    // Only visible when waveform is scrolling with audio
+    float targetOpacity = hasActiveAudio ? 1.0f : 0.0f;
+    gainCurveOpacity += (targetOpacity - gainCurveOpacity) * 0.08f;
+    
+    // Skip drawing if fully faded out
+    if (gainCurveOpacity < 0.02f)
+        return;
     
     juce::SpinLock::ScopedLockType lock(bufferLock);
     
@@ -919,9 +978,9 @@ void WaveformDisplay::drawGainCurve(juce::Graphics& g)
     
     float alpha = gainCurveOpacity;
     
-    // Colors for boost (electric cyan) and cut (rich purple)
-    juce::Colour boostColour(0xFF00D4FF);  // Electric blue/cyan
-    juce::Colour cutColour(0xFF9B6DFF);     // Richer purple (more saturated)
+    // Colors for boost (electric cyan) and cut (brighter purple)
+    juce::Colour boostColour(0xFF00D4FF);  // Bright electric cyan - key selling feature
+    juce::Colour cutColour(0xFFB060FF);     // Bright vibrant purple - stands out
     
     // Draw the gain curve as individual line segments with color based on gain direction
     for (int i = 0; i < bufferSize - 1; ++i)
@@ -1210,11 +1269,11 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
             );
         }
         
-        // Gradient: electric blue at top -> purple at bottom of ENTIRE meter
+        // Gradient: softer cyan-blue at top -> softer purple at bottom
         juce::ColourGradient gainGrad(
-            juce::Colour(0xFF00BFFF),  // Electric blue at top
+            juce::Colour(0xFF60B8D0),  // Desaturated cyan-blue at top
             gainMeterBounds.getX(), gainMeterBounds.getY(),
-            juce::Colour(0xFF8A2BE2),  // Purple at bottom
+            juce::Colour(0xFF9070B8),  // Desaturated purple at bottom
             gainMeterBounds.getX(), gainMeterBounds.getBottom(),
             false
         );
@@ -1230,8 +1289,8 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
         
         // Interpolate color based on position
         float colorPos = (peakY - gainMeterBounds.getY()) / gainMeterBounds.getHeight();
-        juce::Colour peakColour = juce::Colour(0xFF00BFFF).interpolatedWith(
-            juce::Colour(0xFF8A2BE2), colorPos);
+        juce::Colour peakColour = juce::Colour(0xFF60B8D0).interpolatedWith(
+            juce::Colour(0xFF9070B8), colorPos);
         g.setColour(peakColour);
         g.fillRect(gainMeterBounds.getX(), peakY - 1.0f, singleMeterWidth, 2.0f);
     }

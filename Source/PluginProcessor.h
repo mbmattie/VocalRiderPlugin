@@ -143,6 +143,7 @@ public:
     // Presets
     struct Preset
     {
+        juce::String category;  // Category for grouping presets
         juce::String name;
         float targetLevel;
         float speed;
@@ -153,6 +154,7 @@ public:
     };
     
     static const std::vector<Preset>& getFactoryPresets();
+    static std::vector<juce::String> getPresetCategories();
     void loadPreset(int index);
 
     //==============================================================================

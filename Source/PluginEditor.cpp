@@ -12,6 +12,7 @@
 
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include <map>
 
 //==============================================================================
 VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioProcessor& p)
@@ -67,8 +68,30 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
 
     presetComboBox.setTextWhenNothingSelected("Preset");
     const auto& presets = VocalRiderAudioProcessor::getFactoryPresets();
+    
+    // Build submenus for each category
+    auto* rootMenu = presetComboBox.getRootMenu();
+    rootMenu->clear();
+    
+    // Get unique categories and organize presets
+    std::map<juce::String, juce::PopupMenu> categoryMenus;
+    
     for (int i = 0; i < static_cast<int>(presets.size()); ++i)
-        presetComboBox.addItem(presets[static_cast<size_t>(i)].name, i + 1);
+    {
+        const auto& preset = presets[static_cast<size_t>(i)];
+        categoryMenus[preset.category].addItem(i + 1, preset.name);
+    }
+    
+    // Add category submenus
+    const std::vector<juce::String> categoryOrder = { "Vocals", "Speaking", "Mattie's Favorites" };
+    for (const auto& category : categoryOrder)
+    {
+        if (categoryMenus.find(category) != categoryMenus.end())
+        {
+            rootMenu->addSubMenu(category, categoryMenus[category]);
+        }
+    }
+    
     presetComboBox.onChange = [this] {
         int idx = presetComboBox.getSelectedId() - 1;
         if (idx >= 0)
@@ -253,18 +276,18 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     };
     addAndMakeVisible(silenceToggle);
     
-    // Auto-Target button in bottom bar (replaces old Learn button)
+    // Auto-Target button in bottom bar - single click to activate
+    autoTargetButton.setClickingTogglesState(false);  // Don't toggle, just click
     autoTargetButton.onClick = [this] {
-        if (!autoTargetButton.getToggleState()) {
-            autoTargetButton.setToggleState(true, juce::dontSendNotification);
-            autoTargetButton.setPulsing(true);  // Start pulsing animation
-            learnCountdown = 180;  // 3 seconds at 60Hz
-            // Reset learning stats - min starts HIGH so actual audio is captured
-            learnMinDb = 6.0f;     // Start high - actual audio will be lower
-            learnMaxDb = -100.0f;  // Start low - actual audio will be higher
-            learnSumDb = 0.0f;
-            learnSampleCount = 0;
-        }
+        // Always start learning on click
+        autoTargetButton.setToggleState(true, juce::dontSendNotification);
+        autoTargetButton.setPulsing(true);  // Start pulsing animation
+        learnCountdown = 180;  // 3 seconds at 60Hz
+        // Reset learning stats - min starts HIGH so actual audio is captured
+        learnMinDb = 6.0f;     // Start high - actual audio will be lower
+        learnMaxDb = -100.0f;  // Start low - actual audio will be higher
+        learnSumDb = 0.0f;
+        learnSampleCount = 0;
     };
     addAndMakeVisible(autoTargetButton);
     
@@ -293,18 +316,18 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
             valueTooltip.showValue("SPEED", getHelpText("SPEED_BTN"), &speedButton, false, true);
     };
     speedButton.onMouseExit = [this]() {
-        if (helpModeActive)
+        if (helpModeActive && !speedButton.isMouseOver())
             valueTooltip.hideTooltip();
     };
     addAndMakeVisible(speedButton);
     
-    // Natural toggle help
+    // Natural toggle help - check if actually still over button before hiding
     naturalToggle.onMouseEnter = [this]() {
         if (helpModeActive)
             valueTooltip.showValue("NATURAL", getHelpText("NATURAL"), &naturalToggle, false, true);
     };
     naturalToggle.onMouseExit = [this]() {
-        if (helpModeActive)
+        if (helpModeActive && !naturalToggle.isMouseOver())
             valueTooltip.hideTooltip();
     };
     
@@ -314,16 +337,29 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
             valueTooltip.showValue("SILENCE", getHelpText("SILENCE"), &silenceToggle, false, true);
     };
     silenceToggle.onMouseExit = [this]() {
+        if (helpModeActive && !silenceToggle.isMouseOver())
+            valueTooltip.hideTooltip();
+    };
+    
+    // Auto-target button help
+    autoTargetButton.onMouseEnter = [this]() {
         if (helpModeActive)
+            valueTooltip.showValue("AUTO-TARGET", getHelpText("AUTOTARGET"), &autoTargetButton, false, true);
+    };
+    autoTargetButton.onMouseExit = [this]() {
+        if (helpModeActive && !autoTargetButton.isMouseOver())
             valueTooltip.hideTooltip();
     };
     
     // Help button toggle
     helpButton.onClick = [this] {
         helpModeActive = helpButton.getToggleState();
-        // When help mode is on, tooltips will show descriptions
+        
+        // When help mode is turned OFF, fade out any visible tooltip
         if (!helpModeActive)
-            valueTooltip.hideTooltip();
+        {
+            valueTooltip.hideTooltipImmediate();
+        }
     };
     addAndMakeVisible(helpButton);
     
@@ -367,40 +403,33 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
         breathLabel.setAlpha(alpha);
         transientLabel.setAlpha(alpha);
         outputTrimLabel.setAlpha(alpha);
-        trimMinLabel.setAlpha(alpha);
-        trimMidLabel.setAlpha(alpha);
-        trimMaxLabel.setAlpha(alpha);
-        
-        // Hide components when fully faded out
-        if (advancedPanel.isFullyHidden() && !advancedPanelVisible)
-        {
-            advancedPanel.setVisible(false);
-            advancedHeaderLabel.setVisible(false);
-            lookAheadComboBox.setVisible(false);
-            detectionModeComboBox.setVisible(false);
-            attackSlider.setVisible(false);
-            releaseSlider.setVisible(false);
-            holdSlider.setVisible(false);
-            breathReductionSlider.setVisible(false);
-            transientPreservationSlider.setVisible(false);
-            outputTrimMeter.setVisible(false);
-            attackLabel.setVisible(false);
-            releaseLabel.setVisible(false);
-            holdLabel.setVisible(false);
-            breathLabel.setVisible(false);
-            transientLabel.setVisible(false);
-            outputTrimLabel.setVisible(false);
-            trimMinLabel.setVisible(false);
-            trimMidLabel.setVisible(false);
-            trimMaxLabel.setVisible(false);
-            
-            #if JucePlugin_Build_Standalone
-            loadFileButton.setVisible(false);
-            playStopButton.setVisible(false);
-            rewindButton.setVisible(false);
-            fileNameLabel.setVisible(false);
-            #endif
-        }
+    trimMinLabel.setAlpha(alpha);
+    trimMidLabel.setAlpha(alpha);
+    trimMaxLabel.setAlpha(alpha);
+    
+    // Hide components when fully faded out
+    if (advancedPanel.isFullyHidden() && !advancedPanelVisible)
+    {
+        advancedPanel.setVisible(false);
+        advancedHeaderLabel.setVisible(false);
+        lookAheadComboBox.setVisible(false);
+        detectionModeComboBox.setVisible(false);
+        attackSlider.setVisible(false);
+        releaseSlider.setVisible(false);
+        holdSlider.setVisible(false);
+        breathReductionSlider.setVisible(false);
+        transientPreservationSlider.setVisible(false);
+        outputTrimMeter.setVisible(false);
+        attackLabel.setVisible(false);
+        releaseLabel.setVisible(false);
+        holdLabel.setVisible(false);
+        breathLabel.setVisible(false);
+        transientLabel.setVisible(false);
+        outputTrimLabel.setVisible(false);
+        trimMinLabel.setVisible(false);
+        trimMidLabel.setVisible(false);
+        trimMaxLabel.setVisible(false);
+    }
         
         repaint();
     };
@@ -564,29 +593,6 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     setupTrimRangeLabel(trimMidLabel, "0");
     setupTrimRangeLabel(trimMaxLabel, "+12");
 
-    //==============================================================================
-    #if JucePlugin_Build_Standalone
-    loadFileButton.setButtonText("Load");
-    loadFileButton.onClick = [this] { loadFileButtonClicked(); };
-    addAndMakeVisible(loadFileButton);
-
-    playStopButton.setButtonText("Play");
-    playStopButton.onClick = [this] { playStopButtonClicked(); };
-    playStopButton.setEnabled(false);
-    addAndMakeVisible(playStopButton);
-
-    rewindButton.setButtonText("<<");
-    rewindButton.onClick = [this] { audioProcessor.rewindPlayback(); };
-    rewindButton.setEnabled(false);
-    addAndMakeVisible(rewindButton);
-
-    fileNameLabel.setText("Load an audio file", juce::dontSendNotification);
-    fileNameLabel.setFont(CustomLookAndFeel::getPluginFont(10.0f));
-    fileNameLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getDimTextColour());
-    fileNameLabel.setJustificationType(juce::Justification::centredLeft);
-    addAndMakeVisible(fileNameLabel);
-    #endif
-
     // Set initial size to medium
     setWindowSize(WindowSize::Medium);
     startTimerHz(30);
@@ -641,13 +647,6 @@ void VocalRiderAudioProcessorEditor::toggleAdvancedPanel()
     trimMidLabel.setVisible(true);
     trimMaxLabel.setVisible(true);
     
-    #if JucePlugin_Build_Standalone
-    loadFileButton.setVisible(true);
-    playStopButton.setVisible(true);
-    rewindButton.setVisible(true);
-    fileNameLabel.setVisible(true);
-    #endif
-    
     // Set child component opacity via alpha
     float alpha = advancedPanel.getCurrentOpacity();
     advancedHeaderLabel.setAlpha(alpha);
@@ -668,13 +667,6 @@ void VocalRiderAudioProcessorEditor::toggleAdvancedPanel()
     trimMinLabel.setAlpha(alpha);
     trimMidLabel.setAlpha(alpha);
     trimMaxLabel.setAlpha(alpha);
-    
-    #if JucePlugin_Build_Standalone
-    loadFileButton.setAlpha(alpha);
-    playStopButton.setAlpha(alpha);
-    rewindButton.setAlpha(alpha);
-    fileNameLabel.setAlpha(alpha);
-    #endif
     
     if (advancedPanelVisible) updateAdvancedControls();
     
@@ -744,44 +736,6 @@ void VocalRiderAudioProcessorEditor::setScale(int scalePercent)
     resized();
 }
 
-#if JucePlugin_Build_Standalone
-void VocalRiderAudioProcessorEditor::loadFileButtonClicked()
-{
-    fileChooser = std::make_unique<juce::FileChooser>(
-        "Select a vocal file...", juce::File{},
-        "*.wav;*.mp3;*.aif;*.aiff;*.flac;*.ogg"
-    );
-
-    fileChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-        [this](const juce::FileChooser& fc)
-        {
-            auto file = fc.getResult();
-            if (file.existsAsFile())
-            {
-                if (audioProcessor.loadAudioFile(file))
-                {
-                    fileNameLabel.setText(audioProcessor.getLoadedFileName(), juce::dontSendNotification);
-                    fileNameLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getTextColour());
-                    playStopButton.setEnabled(true);
-                    rewindButton.setEnabled(true);
-                    waveformDisplay.clear();
-                }
-            }
-        });
-}
-
-void VocalRiderAudioProcessorEditor::playStopButtonClicked()
-{
-    audioProcessor.togglePlayback();
-    updatePlaybackUI();
-}
-
-void VocalRiderAudioProcessorEditor::updatePlaybackUI()
-{
-    playStopButton.setButtonText(audioProcessor.isPlaying() ? "Stop" : "Play");
-}
-#endif
-
 //==============================================================================
 void VocalRiderAudioProcessorEditor::paint(juce::Graphics& g)
 {
@@ -813,7 +767,7 @@ void VocalRiderAudioProcessorEditor::paint(juce::Graphics& g)
     
     //==========================================================================
     // FabFilter-style header bar
-    float headerHeight = 70.0f;  // Increased to match resized() height
+    float headerHeight = 52.0f;  // Compact header
     auto headerBounds = bounds.removeFromTop(headerHeight);
     
     // Draw header background - darker, integrated
@@ -914,8 +868,8 @@ void VocalRiderAudioProcessorEditor::resized()
     auto bounds = getLocalBounds();
     
     //==========================================================================
-    // FabFilter-style header bar (taller height for full logo)
-    int headerHeight = 70;  // Increased height to prevent logo cutoff
+    // FabFilter-style header bar (compact height)
+    int headerHeight = 52;  // Compact header
     auto headerArea = bounds.removeFromTop(headerHeight);
     
     // Brand section on the left - Full SVG logo with all branding
@@ -962,15 +916,6 @@ void VocalRiderAudioProcessorEditor::resized()
     controlsArea.removeFromRight(4);
     undoButton.setBounds(controlsArea.removeFromRight(smallButtonSize).withY(smallCenterY).withHeight(smallButtonSize));
     
-    #if JucePlugin_Build_Standalone
-    // Audio player controls hidden from header - will be in advanced panel
-    // For now, place them off-screen
-    rewindButton.setBounds(-100, -100, 28, buttonHeight);
-    playStopButton.setBounds(-100, -100, 40, buttonHeight);
-    loadFileButton.setBounds(-100, -100, 40, buttonHeight);
-    fileNameLabel.setBounds(-100, -100, 100, buttonHeight);
-    #endif
-    
     // Bottom bar at very bottom
     auto bottomArea = bounds.removeFromBottom(bottomBarHeight);
     bottomBar.setBounds(bottomArea);
@@ -1007,11 +952,7 @@ void VocalRiderAudioProcessorEditor::resized()
     
     if (showingPanel)
     {
-        #if JucePlugin_Build_Standalone
-        int advHeight = 160;  // Taller for audio controls
-        #else
         int advHeight = 130;
-        #endif
         auto advArea = bounds.removeFromTop(advHeight).reduced(12, 0);
         advancedPanel.setBounds(advArea);
         
@@ -1021,19 +962,6 @@ void VocalRiderAudioProcessorEditor::resized()
         auto headerRow = advContent.removeFromTop(16);
         advancedHeaderLabel.setBounds(headerRow);
         advContent.removeFromTop(4);
-        
-        #if JucePlugin_Build_Standalone
-        // Audio player controls row (for standalone testing)
-        auto playerRow = advContent.removeFromTop(24);
-        loadFileButton.setBounds(playerRow.removeFromLeft(50));
-        playerRow.removeFromLeft(4);
-        playStopButton.setBounds(playerRow.removeFromLeft(50));
-        playerRow.removeFromLeft(4);
-        rewindButton.setBounds(playerRow.removeFromLeft(30));
-        playerRow.removeFromLeft(8);
-        fileNameLabel.setBounds(playerRow);
-        advContent.removeFromTop(6);
-        #endif
         
         // Dropdowns in row
         auto dropdownRow = advContent.removeFromTop(24);
@@ -1238,19 +1166,6 @@ void VocalRiderAudioProcessorEditor::timerCallback()
         valueTooltip.hideTooltip();
     }
 
-    #if JucePlugin_Build_Standalone
-    if (audioProcessor.hasFileLoaded())
-    {
-        bool currentlyPlaying = audioProcessor.isPlaying();
-        
-        if (wasPlaying && !currentlyPlaying && audioProcessor.hasPlaybackFinished())
-            updatePlaybackUI();
-        wasPlaying = currentlyPlaying;
-
-        if (currentlyPlaying != (playStopButton.getButtonText() == "Stop"))
-            updatePlaybackUI();
-    }
-    #endif
 }
 
 //==============================================================================
@@ -1346,5 +1261,13 @@ juce::String VocalRiderAudioProcessorEditor::getHelpText(const juce::String& con
         return "Reduces gain on silent sections.\nLowers noise floor by -6dB.";
     if (controlName == "SPEED_BTN")
         return "Waveform scroll speed.\nSlower = see more history.";
+    if (controlName == "AUTOTARGET")
+        return "Auto-analyze audio for 3 sec.\nSets target, range, and speed.";
+    if (controlName == "INPUT_METER")
+        return "Input level meter.\nShows your incoming signal level.";
+    if (controlName == "OUTPUT_METER")
+        return "Output level meter.\nShows level after gain riding.";
+    if (controlName == "GAIN_METER")
+        return "Current gain adjustment.\nGreen = boost, Purple = cut.";
     return "";
 }

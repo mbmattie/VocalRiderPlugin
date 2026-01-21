@@ -22,14 +22,37 @@ const juce::String VocalRiderAudioProcessor::gainOutputParamId = "gainOutput";
 // Factory Presets
 const std::vector<VocalRiderAudioProcessor::Preset>& VocalRiderAudioProcessor::getFactoryPresets()
 {
+    // Category, Name, Target, Speed, Range, Attack, Release, Hold
     static const std::vector<Preset> presets = {
-        { "Gentle",      -18.0f, 30.0f,  6.0f, 100.0f, 400.0f,  50.0f },
-        { "Broadcast",   -16.0f, 60.0f, 10.0f,  30.0f, 150.0f,  20.0f },
-        { "Aggressive",  -14.0f, 80.0f, 12.0f,  10.0f,  50.0f,   0.0f },
-        { "Dialogue",    -20.0f, 40.0f,  8.0f,  80.0f, 300.0f, 100.0f },
-        { "Podcast",     -18.0f, 50.0f,  9.0f,  50.0f, 200.0f,  30.0f },
+        // Vocals - for singing and music production
+        { "Vocals",    "Gentle Lead",      -18.0f, 30.0f,  6.0f, 100.0f, 400.0f,  50.0f },
+        { "Vocals",    "Tight Lead",       -16.0f, 55.0f,  8.0f,  40.0f, 150.0f,  30.0f },
+        { "Vocals",    "Dynamic Lead",     -17.0f, 45.0f, 10.0f,  60.0f, 250.0f,  40.0f },
+        { "Vocals",    "Backing Vocals",   -22.0f, 35.0f,  5.0f,  80.0f, 350.0f,  60.0f },
+        { "Vocals",    "Breathy Vocal",    -19.0f, 40.0f,  7.0f,  70.0f, 300.0f,  80.0f },
+        { "Vocals",    "Aggressive Mix",   -14.0f, 75.0f, 12.0f,  15.0f,  60.0f,  10.0f },
+        
+        // Speaking/Dialogue - for podcasts, voiceovers, etc.
+        { "Speaking",  "Podcast",          -18.0f, 50.0f,  9.0f,  50.0f, 200.0f,  30.0f },
+        { "Speaking",  "Broadcast",        -16.0f, 60.0f, 10.0f,  30.0f, 150.0f,  20.0f },
+        { "Speaking",  "Dialogue",         -20.0f, 40.0f,  8.0f,  80.0f, 300.0f, 100.0f },
+        { "Speaking",  "Voiceover",        -17.0f, 55.0f,  8.0f,  45.0f, 180.0f,  40.0f },
+        { "Speaking",  "Interview",        -19.0f, 45.0f,  7.0f,  60.0f, 250.0f,  50.0f },
+        { "Speaking",  "Audiobook",        -21.0f, 35.0f,  6.0f,  90.0f, 400.0f,  80.0f },
+        
+        // Mattie's Favorites - curated collection
+        { "Mattie's Favorites", "Smooth Rider",     -18.0f, 42.0f,  7.0f,  65.0f, 280.0f,  45.0f },
+        { "Mattie's Favorites", "Crystal Clear",    -17.0f, 52.0f,  8.0f,  50.0f, 200.0f,  35.0f },
+        { "Mattie's Favorites", "Magic Touch",      -19.0f, 38.0f,  6.0f,  75.0f, 320.0f,  55.0f },
+        { "Mattie's Favorites", "Radio Ready",      -15.0f, 65.0f, 10.0f,  25.0f, 120.0f,  15.0f },
+        { "Mattie's Favorites", "Natural Flow",     -20.0f, 32.0f,  5.0f,  85.0f, 380.0f,  70.0f },
     };
     return presets;
+}
+
+std::vector<juce::String> VocalRiderAudioProcessor::getPresetCategories()
+{
+    return { "Vocals", "Speaking", "Mattie's Favorites" };
 }
 
 //==============================================================================
