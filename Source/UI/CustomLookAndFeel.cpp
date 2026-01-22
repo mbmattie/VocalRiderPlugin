@@ -502,7 +502,7 @@ void CustomLookAndFeel::drawPopupMenuBackground(juce::Graphics& g, int width, in
 
 void CustomLookAndFeel::drawPopupMenuItem(juce::Graphics& g, const juce::Rectangle<int>& area,
                                            bool isSeparator, bool isActive, bool isHighlighted,
-                                           bool isTicked, bool /*hasSubMenu*/,
+                                           bool isTicked, bool hasSubMenu,
                                            const juce::String& text, const juce::String& /*shortcutKeyText*/,
                                            const juce::Drawable* /*icon*/, const juce::Colour* /*textColour*/)
 {
@@ -533,9 +533,10 @@ void CustomLookAndFeel::drawPopupMenuItem(juce::Graphics& g, const juce::Rectang
                              : getDimTextColour().withAlpha(0.4f));
     
     float textLeftMargin = 12.0f;
+    float arrowWidth = hasSubMenu ? 16.0f : 0.0f;  // Reserve space for arrow
     auto textBounds = bounds;
     textBounds.setX(bounds.getX() + textLeftMargin);
-    textBounds.setWidth(bounds.getWidth() - textLeftMargin - 8.0f);
+    textBounds.setWidth(bounds.getWidth() - textLeftMargin - 8.0f - arrowWidth);
     
     if (isTicked)
     {
@@ -545,6 +546,22 @@ void CustomLookAndFeel::drawPopupMenuItem(juce::Graphics& g, const juce::Rectang
     }
     
     g.drawText(text, textBounds, juce::Justification::centredLeft);
+    
+    // Draw submenu arrow on the right
+    if (hasSubMenu)
+    {
+        float arrowX = bounds.getRight() - 12.0f;
+        float arrowY = bounds.getCentreY();
+        float arrowSize = 4.0f;
+        
+        juce::Path arrow;
+        arrow.addTriangle(arrowX, arrowY - arrowSize,
+                          arrowX, arrowY + arrowSize,
+                          arrowX + arrowSize, arrowY);
+        
+        g.setColour(isHighlighted ? getTextColour() : getDimTextColour());
+        g.fillPath(arrow);
+    }
 }
 
 juce::Font CustomLookAndFeel::getPopupMenuFont()

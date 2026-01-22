@@ -1103,22 +1103,43 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
     
     // ========== OUTPUT METER ==========
     float outputDb = outputLevelDb.load();
-    float outputNorm = juce::jmap(outputDb, -48.0f, 0.0f, 0.0f, 1.0f);
-    outputNorm = juce::jlimit(0.0f, 1.0f, outputNorm);
     
-    // Update RMS average (slower decay)
-    // Longer RMS averaging (slower decay for more stable display)
+    // Simple, reliable metering: follow input with moderate smoothing
     if (outputDb > -60.0f)
     {
-        // Exponential moving average with longer time constant
-        float alpha = 0.02f;  // Slower response = longer averaging
-        outputRmsDb = outputRmsDb * (1.0f - alpha) + outputDb * alpha;
+        // Signal present: smooth towards current value
+        if (outputDb > outputDisplayDb)
+        {
+            // Fast attack
+            outputDisplayDb = outputDisplayDb + (outputDb - outputDisplayDb) * 0.5f;
+        }
+        else
+        {
+            // Moderate release
+            outputDisplayDb = outputDisplayDb + (outputDb - outputDisplayDb) * 0.15f;
+        }
     }
     else
     {
-        // Slow decay when no signal
-        outputRmsDb = outputRmsDb * 0.995f - 0.1f;
-        if (outputRmsDb < -60.0f) outputRmsDb = -100.0f;
+        // No signal: decay towards silence (subtract dB directly)
+        outputDisplayDb -= 3.0f;  // 3 dB per frame = fast decay to silence
+        if (outputDisplayDb < -60.0f) 
+            outputDisplayDb = -100.0f;
+    }
+    
+    float outputNorm = juce::jmap(outputDisplayDb, -48.0f, 0.0f, 0.0f, 1.0f);
+    outputNorm = juce::jlimit(0.0f, 1.0f, outputNorm);
+    
+    // Update RMS average (slower for background reference)
+    if (outputDb > -60.0f)
+    {
+        outputRmsDb = outputRmsDb + (outputDb - outputRmsDb) * 0.03f;
+    }
+    else
+    {
+        outputRmsDb -= 3.0f;
+        if (outputRmsDb < -60.0f) 
+            outputRmsDb = -100.0f;
     }
     
     // Draw RMS average line (faint, behind main meter) - only when signal is active

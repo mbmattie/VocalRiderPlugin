@@ -307,11 +307,17 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     }
     #endif
 
-    // Get parameters
-    float targetLevel = targetLevelParam->load();
+    // Get parameters with smoothing to prevent clicks/pops on rapid changes
+    float targetLevelRaw = targetLevelParam->load();
     float speed = speedParam->load();
-    float range = rangeParam->load();
+    float rangeRaw = rangeParam->load();
     bool useLookAhead = isLookAheadEnabled();
+    
+    // Smooth target and range parameters (prevents clicks on rapid UI changes)
+    smoothedTargetLevel = smoothedTargetLevel * paramSmoothingCoeff + targetLevelRaw * (1.0f - paramSmoothingCoeff);
+    smoothedRange = smoothedRange * paramSmoothingCoeff + rangeRaw * (1.0f - paramSmoothingCoeff);
+    float targetLevel = smoothedTargetLevel;
+    float range = smoothedRange;
 
     // Update speed-dependent settings
     if (std::abs(speed - lastSpeed) > 0.5f)
@@ -740,12 +746,12 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         outputSamples[static_cast<size_t>(sample)] = sum / static_cast<float>(juce::jmin(totalNumInputChannels, 2));
     }
 
-    // Push to waveform display
-    if (waveformDisplay != nullptr)
+    // Push to waveform display (thread-safe access)
+    if (auto* display = waveformDisplay.load())
     {
-        waveformDisplay->pushSamples(inputSamples.data(), outputSamples.data(), 
-                                      gainSamples.data(), numSamples);
-        waveformDisplay->setTargetLevel(targetLevel);
+        display->pushSamples(inputSamples.data(), outputSamples.data(), 
+                             gainSamples.data(), numSamples);
+        display->setTargetLevel(targetLevel);
     }
 
     // Output metering
@@ -779,6 +785,11 @@ void VocalRiderAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty("transientPreservation", transientPreservation.load(), nullptr);
     state.setProperty("outputTrim", outputTrimDb.load(), nullptr);
     state.setProperty("automationMode", static_cast<int>(automationMode.load()), nullptr);
+    
+    // UI state persistence
+    state.setProperty("smartSilence", smartSilenceEnabled.load(), nullptr);
+    state.setProperty("scrollSpeed", scrollSpeedSetting.load(), nullptr);
+    state.setProperty("presetIndex", currentPresetIndex.load(), nullptr);
     
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
     copyXmlToBinary(*xml, destData);
@@ -814,6 +825,14 @@ void VocalRiderAudioProcessor::setStateInformation(const void* data, int sizeInB
             setOutputTrim(static_cast<float>(state.getProperty("outputTrim")));
         if (state.hasProperty("automationMode"))
             setAutomationMode(static_cast<AutomationMode>(static_cast<int>(state.getProperty("automationMode"))));
+        
+        // UI state restoration
+        if (state.hasProperty("smartSilence"))
+            setSmartSilenceEnabled(static_cast<bool>(state.getProperty("smartSilence")));
+        if (state.hasProperty("scrollSpeed"))
+            setScrollSpeed(static_cast<float>(state.getProperty("scrollSpeed")));
+        if (state.hasProperty("presetIndex"))
+            setCurrentPresetIndex(static_cast<int>(state.getProperty("presetIndex")));
     }
 }
 
@@ -1057,6 +1076,30 @@ void VocalRiderAudioProcessor::loadPreset(int index)
         releaseMs.store(preset.releaseMs);
         holdMs.store(preset.holdMs);
     }
+}
+
+void VocalRiderAudioProcessor::resetToDefaults()
+{
+    // Reset main parameters to defaults
+    if (auto* param = apvts.getParameter(targetLevelParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(-18.0f));  // Default target
+    if (auto* param = apvts.getParameter(speedParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(50.0f));   // Default speed
+    if (auto* param = apvts.getParameter(rangeParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(12.0f));   // Default range
+    
+    // Reset advanced parameters
+    attackMs.store(10.0f);
+    releaseMs.store(100.0f);
+    holdMs.store(50.0f);
+    naturalModeEnabled.store(false);
+    smartSilenceEnabled.store(false);
+    breathReductionDb.store(0.0f);
+    transientPreservation.store(0.0f);
+    outputTrimDb.store(0.0f);
+    lookAheadMode.store(0);
+    useLufsMode.store(false);
+    automationMode.store(AutomationMode::Read);
 }
 
 //==============================================================================

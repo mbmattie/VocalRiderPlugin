@@ -22,6 +22,8 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     setLookAndFeel(&customLookAndFeel);
     // Disable manual resizing - only allow preset sizes
     setResizable(false, false);
+    // Enable keyboard focus for shortcuts (Cmd+Z, etc.)
+    setWantsKeyboardFocus(true);
 
     //==============================================================================
     // Header branding - compact, single line
@@ -44,7 +46,7 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     addAndMakeVisible(titleLabel);
     
     // Footer text
-    footerLabel.setText("v1.0", juce::dontSendNotification);
+    footerLabel.setText("v" + juce::String(JucePlugin_VersionString), juce::dontSendNotification);
     footerLabel.setFont(CustomLookAndFeel::getPluginFont(9.0f));
     footerLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getVeryDimTextColour());
     footerLabel.setJustificationType(juce::Justification::centredLeft);
@@ -73,7 +75,11 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     auto* rootMenu = presetComboBox.getRootMenu();
     rootMenu->clear();
     
-    // Get unique categories and organize presets
+    // Add "Init" preset at the very beginning (ID = 1000 to avoid conflict)
+    rootMenu->addItem(1000, "Init");
+    rootMenu->addSeparator();
+    
+    // Get unique categories and organize presets (IDs start at 1)
     std::map<juce::String, juce::PopupMenu> categoryMenus;
     
     for (int i = 0; i < static_cast<int>(presets.size()); ++i)
@@ -82,7 +88,7 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
         categoryMenus[preset.category].addItem(i + 1, preset.name);
     }
     
-    // Add category submenus
+    // Add category submenus (arrows drawn by CustomLookAndFeel::drawPopupMenuItem)
     const std::vector<juce::String> categoryOrder = { "Vocals", "Speaking", "Mattie's Favorites" };
     for (const auto& category : categoryOrder)
     {
@@ -93,10 +99,20 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     }
     
     presetComboBox.onChange = [this] {
-        int idx = presetComboBox.getSelectedId() - 1;
-        if (idx >= 0)
+        int selectedId = presetComboBox.getSelectedId();
+        if (selectedId == 1000)
         {
+            // Init preset - reset to defaults
+            audioProcessor.resetToDefaults();
+            audioProcessor.setCurrentPresetIndex(1000);
+            presetComboBox.setText("Init", juce::dontSendNotification);
+            updateAdvancedControls();
+        }
+        else if (selectedId > 0)
+        {
+            int idx = selectedId - 1;
             audioProcessor.loadPreset(idx);
+            audioProcessor.setCurrentPresetIndex(selectedId);
             updateAdvancedControls();
         }
     };
@@ -185,16 +201,19 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     setupSliderWithTooltip(targetSlider, " dB");
     targetSlider.onValueChange = [this]() {
         if (targetSlider.isMouseOverOrDragging()) {
-            juce::String text = helpModeActive ? getHelpText("TARGET") : juce::String(targetSlider.getValue(), 1) + " dB";
-            valueTooltip.showValue("TARGET", text, &targetSlider, false, helpModeActive);
+            bool showHelp = (currentHoveredComponent == &targetSlider && hoverTimeCounter >= helpHoverDelayTicks);
+            juce::String text = showHelp ? getHelpText("TARGET") : juce::String(targetSlider.getValue(), 1) + " dB";
+            valueTooltip.showValue("TARGET", text, &targetSlider, false, showHelp);
         }
     };
     targetSlider.onDragEnd = [this]() { saveStateForUndo(); };  // Save on mouse release
     targetSlider.onMouseEnter = [this]() {
-        juce::String text = helpModeActive ? getHelpText("TARGET") : juce::String(targetSlider.getValue(), 1) + " dB";
-        valueTooltip.showValue("TARGET", text, &targetSlider, false, helpModeActive);
+        currentHoveredComponent = &targetSlider;
+        hoverTimeCounter = 0;
+        valueTooltip.showValue("TARGET", juce::String(targetSlider.getValue(), 1) + " dB", &targetSlider);
     };
     targetSlider.onMouseExit = [this]() {
+        if (currentHoveredComponent == &targetSlider) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
         valueTooltip.hideTooltip();
     };
     
@@ -208,16 +227,19 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     setupSliderWithTooltip(rangeSlider, " dB");
     rangeSlider.onValueChange = [this]() {
         if (rangeSlider.isMouseOverOrDragging()) {
-            juce::String text = helpModeActive ? getHelpText("RANGE") : juce::String(rangeSlider.getValue(), 1) + " dB";
-            valueTooltip.showValue("RANGE", text, &rangeSlider, false, helpModeActive);
+            bool showHelp = (currentHoveredComponent == &rangeSlider && hoverTimeCounter >= helpHoverDelayTicks);
+            juce::String text = showHelp ? getHelpText("RANGE") : juce::String(rangeSlider.getValue(), 1) + " dB";
+            valueTooltip.showValue("RANGE", text, &rangeSlider, false, showHelp);
         }
     };
     rangeSlider.onDragEnd = [this]() { saveStateForUndo(); };  // Save on mouse release
     rangeSlider.onMouseEnter = [this]() {
-        juce::String text = helpModeActive ? getHelpText("RANGE") : juce::String(rangeSlider.getValue(), 1) + " dB";
-        valueTooltip.showValue("RANGE", text, &rangeSlider, false, helpModeActive);
+        currentHoveredComponent = &rangeSlider;
+        hoverTimeCounter = 0;
+        valueTooltip.showValue("RANGE", juce::String(rangeSlider.getValue(), 1) + " dB", &rangeSlider);
     };
     rangeSlider.onMouseExit = [this]() {
+        if (currentHoveredComponent == &rangeSlider) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
         valueTooltip.hideTooltip();
     };
     
@@ -233,16 +255,19 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
         audioProcessor.updateAttackReleaseFromSpeed(static_cast<float>(speedSlider.getValue()));
         if (advancedPanelVisible) updateAdvancedControls();
         if (speedSlider.isMouseOverOrDragging()) {
-            juce::String text = helpModeActive ? getHelpText("SPEED") : juce::String(static_cast<int>(speedSlider.getValue())) + "%";
-            valueTooltip.showValue("SPEED", text, &speedSlider, false, helpModeActive);
+            bool showHelp = (currentHoveredComponent == &speedSlider && hoverTimeCounter >= helpHoverDelayTicks);
+            juce::String text = showHelp ? getHelpText("SPEED") : juce::String(static_cast<int>(speedSlider.getValue())) + "%";
+            valueTooltip.showValue("SPEED", text, &speedSlider, false, showHelp);
         }
     };
     speedSlider.onDragEnd = [this]() { saveStateForUndo(); };  // Save on mouse release
     speedSlider.onMouseEnter = [this]() {
-        juce::String text = helpModeActive ? getHelpText("SPEED") : juce::String(static_cast<int>(speedSlider.getValue())) + "%";
-        valueTooltip.showValue("SPEED", text, &speedSlider, false, helpModeActive);
+        currentHoveredComponent = &speedSlider;
+        hoverTimeCounter = 0;
+        valueTooltip.showValue("SPEED", juce::String(static_cast<int>(speedSlider.getValue())) + "%", &speedSlider);
     };
     speedSlider.onMouseExit = [this]() {
+        if (currentHoveredComponent == &speedSlider) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
         valueTooltip.hideTooltip();
     };
     
@@ -260,17 +285,13 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     gainMeterLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(gainMeterLabel);
     
-    // Natural toggle - default OFF (in bottom bar)
-    naturalToggle.setToggleState(false, juce::dontSendNotification);
-    audioProcessor.setNaturalModeEnabled(false);
+    // Natural toggle - synced from processor state in updateAdvancedControls()
     naturalToggle.onClick = [this] {
         audioProcessor.setNaturalModeEnabled(naturalToggle.getToggleState());
     };
     addAndMakeVisible(naturalToggle);
     
-    // Smart Silence toggle - default OFF (now called silenceToggle)
-    silenceToggle.setToggleState(false, juce::dontSendNotification);
-    audioProcessor.setSmartSilenceEnabled(false);
+    // Smart Silence toggle - synced from processor state in updateAdvancedControls()
     silenceToggle.onClick = [this] {
         audioProcessor.setSmartSilenceEnabled(silenceToggle.getToggleState());
     };
@@ -295,71 +316,108 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     // learnButton kept for backwards compatibility but not shown
     
     // Speed button in bottom bar - controls waveform scroll speed
-    waveformDisplay.setScrollSpeed(0.5f);  // Default to medium speed
+    waveformDisplay.setScrollSpeed(0.33f);  // Default to medium speed (15s)
+    speedButton.setLabel("15s");
     speedButton.onClick = [this] {
         juce::PopupMenu menu;
         menu.setLookAndFeel(&getLookAndFeel());
         float currentSpeed = waveformDisplay.getScrollSpeed();
-        menu.addItem(1, "Fast (5s)", true, currentSpeed > 0.8f);
-        menu.addItem(2, "Medium (10s)", true, currentSpeed > 0.4f && currentSpeed <= 0.8f);
-        menu.addItem(3, "Slow (15s)", true, currentSpeed <= 0.4f);
+        menu.addItem(1, "Fast (10s)", true, currentSpeed > 0.4f);
+        menu.addItem(2, "Medium (15s)", true, currentSpeed > 0.28f && currentSpeed <= 0.4f);
+        menu.addItem(3, "Slow (20s)", true, currentSpeed <= 0.28f);
         
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&speedButton),
             [this](int result) {
-                if (result == 1) { waveformDisplay.setScrollSpeed(1.0f); speedButton.setLabel("5s"); }
-                else if (result == 2) { waveformDisplay.setScrollSpeed(0.5f); speedButton.setLabel("10s"); }
-                else if (result == 3) { waveformDisplay.setScrollSpeed(0.33f); speedButton.setLabel("15s"); }
+                if (result == 1) { 
+                    waveformDisplay.setScrollSpeed(0.5f); 
+                    speedButton.setLabel("10s"); 
+                    audioProcessor.setScrollSpeed(0.5f);
+                }
+                else if (result == 2) { 
+                    waveformDisplay.setScrollSpeed(0.33f); 
+                    speedButton.setLabel("15s"); 
+                    audioProcessor.setScrollSpeed(0.33f);
+                }
+                else if (result == 3) { 
+                    waveformDisplay.setScrollSpeed(0.25f); 
+                    speedButton.setLabel("20s"); 
+                    audioProcessor.setScrollSpeed(0.25f);
+                }
             });
     };
     speedButton.onMouseEnter = [this]() {
-        if (helpModeActive)
-            valueTooltip.showValue("SPEED", getHelpText("SPEED_BTN"), &speedButton, false, true);
+        currentHoveredComponent = &speedButton;
+        hoverTimeCounter = 0;
     };
     speedButton.onMouseExit = [this]() {
-        if (helpModeActive && !speedButton.isMouseOver())
-            valueTooltip.hideTooltip();
+        if (currentHoveredComponent == &speedButton) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+        valueTooltip.hideTooltip();
     };
     addAndMakeVisible(speedButton);
     
-    // Natural toggle help - check if actually still over button before hiding
+    // Automation mode selector (Read/Write/Touch/Latch) - for DAW automation
+    automationModeComboBox.addItem("READ", 1);
+    automationModeComboBox.addItem("WRITE", 2);
+    automationModeComboBox.addItem("TOUCH", 3);
+    automationModeComboBox.addItem("LATCH", 4);
+    automationModeComboBox.setSelectedId(static_cast<int>(audioProcessor.getAutomationMode()) + 1, juce::dontSendNotification);
+    automationModeComboBox.onChange = [this] {
+        int mode = automationModeComboBox.getSelectedId() - 1;
+        audioProcessor.setAutomationMode(static_cast<VocalRiderAudioProcessor::AutomationMode>(mode));
+    };
+    automationModeComboBox.setColour(juce::ComboBox::backgroundColourId, CustomLookAndFeel::getPanelColour());
+    automationModeComboBox.setColour(juce::ComboBox::textColourId, CustomLookAndFeel::getTextColour());
+    automationModeComboBox.setColour(juce::ComboBox::outlineColourId, CustomLookAndFeel::getDimTextColour().withAlpha(0.3f));
+    addAndMakeVisible(automationModeComboBox);
+    
+    // Natural toggle - hover tracking for help tooltip
     naturalToggle.onMouseEnter = [this]() {
-        if (helpModeActive)
-            valueTooltip.showValue("NATURAL", getHelpText("NATURAL"), &naturalToggle, false, true);
+        currentHoveredComponent = &naturalToggle;
+        hoverTimeCounter = 0;
     };
     naturalToggle.onMouseExit = [this]() {
-        if (helpModeActive && !naturalToggle.isMouseOver())
-            valueTooltip.hideTooltip();
+        if (currentHoveredComponent == &naturalToggle) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+        valueTooltip.hideTooltip();
     };
     
-    // Silence toggle help
+    // Silence toggle - hover tracking for help tooltip
     silenceToggle.onMouseEnter = [this]() {
-        if (helpModeActive)
-            valueTooltip.showValue("SILENCE", getHelpText("SILENCE"), &silenceToggle, false, true);
+        currentHoveredComponent = &silenceToggle;
+        hoverTimeCounter = 0;
     };
     silenceToggle.onMouseExit = [this]() {
-        if (helpModeActive && !silenceToggle.isMouseOver())
-            valueTooltip.hideTooltip();
+        if (currentHoveredComponent == &silenceToggle) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+        valueTooltip.hideTooltip();
     };
     
-    // Auto-target button help
+    // Auto-target button - hover tracking for help tooltip
     autoTargetButton.onMouseEnter = [this]() {
-        if (helpModeActive)
-            valueTooltip.showValue("AUTO-TARGET", getHelpText("AUTOTARGET"), &autoTargetButton, false, true);
+        currentHoveredComponent = &autoTargetButton;
+        hoverTimeCounter = 0;
     };
     autoTargetButton.onMouseExit = [this]() {
-        if (helpModeActive && !autoTargetButton.isMouseOver())
-            valueTooltip.hideTooltip();
+        if (currentHoveredComponent == &autoTargetButton) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+        valueTooltip.hideTooltip();
     };
     
     // Help button toggle
+    // Help button now opens About dialog
+    helpButton.setClickingTogglesState(false);
     helpButton.onClick = [this] {
-        helpModeActive = helpButton.getToggleState();
+        // Show About dialog
+        juce::String aboutText = "magic.RIDE v" + juce::String(JucePlugin_VersionString) + "\n\n"
+            "Precision Vocal Leveling\n\n"
+            "by MBM Audio\n"
+            "musicbymattie.com\n\n"
+            "Hover over any control for 3 seconds\n"
+            "to see help information.";
         
-        // When help mode is turned OFF, fade out any visible tooltip
-        if (!helpModeActive)
-        {
-            valueTooltip.hideTooltipImmediate();
-        }
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::MessageBoxIconType::InfoIcon,
+            "About magic.RIDE",
+            aboutText,
+            "OK",
+            this);
     };
     addAndMakeVisible(helpButton);
     
@@ -487,88 +545,111 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     attackSlider.onValueChange = [this] {
         audioProcessor.setAttackMs(static_cast<float>(attackSlider.getValue()));
         if (attackSlider.isMouseOverOrDragging()) {
-            juce::String text = helpModeActive ? getHelpText("ATTACK") : juce::String(static_cast<int>(attackSlider.getValue())) + " ms";
-            valueTooltip.showValue("ATTACK", text, &attackSlider, false, helpModeActive);
+            bool showHelp = (currentHoveredComponent == &attackSlider && hoverTimeCounter >= helpHoverDelayTicks);
+            juce::String text = showHelp ? getHelpText("ATTACK") : juce::String(static_cast<int>(attackSlider.getValue())) + " ms";
+            valueTooltip.showValue("ATTACK", text, &attackSlider, false, showHelp);
         }
     };
     attackSlider.onMouseEnter = [this]() {
-        juce::String text = helpModeActive ? getHelpText("ATTACK") : juce::String(static_cast<int>(attackSlider.getValue())) + " ms";
-        valueTooltip.showValue("ATTACK", text, &attackSlider, false, helpModeActive);
+        currentHoveredComponent = &attackSlider;
+        hoverTimeCounter = 0;
+        valueTooltip.showValue("ATTACK", juce::String(static_cast<int>(attackSlider.getValue())) + " ms", &attackSlider);
     };
-    attackSlider.onMouseExit = []() { /* Don't hide - let timer handle it */ };
+    attackSlider.onMouseExit = [this]() {
+        if (currentHoveredComponent == &attackSlider) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+    };
     
     setupAdvSlider(releaseSlider, 10.0, 2000.0, "ms");
     releaseSlider.onValueChange = [this] {
         audioProcessor.setReleaseMs(static_cast<float>(releaseSlider.getValue()));
         if (releaseSlider.isMouseOverOrDragging()) {
-            juce::String text = helpModeActive ? getHelpText("RELEASE") : juce::String(static_cast<int>(releaseSlider.getValue())) + " ms";
-            valueTooltip.showValue("RELEASE", text, &releaseSlider, false, helpModeActive);
+            bool showHelp = (currentHoveredComponent == &releaseSlider && hoverTimeCounter >= helpHoverDelayTicks);
+            juce::String text = showHelp ? getHelpText("RELEASE") : juce::String(static_cast<int>(releaseSlider.getValue())) + " ms";
+            valueTooltip.showValue("RELEASE", text, &releaseSlider, false, showHelp);
         }
     };
     releaseSlider.onMouseEnter = [this]() {
-        juce::String text = helpModeActive ? getHelpText("RELEASE") : juce::String(static_cast<int>(releaseSlider.getValue())) + " ms";
-        valueTooltip.showValue("RELEASE", text, &releaseSlider, false, helpModeActive);
+        currentHoveredComponent = &releaseSlider;
+        hoverTimeCounter = 0;
+        valueTooltip.showValue("RELEASE", juce::String(static_cast<int>(releaseSlider.getValue())) + " ms", &releaseSlider);
     };
-    releaseSlider.onMouseExit = []() { /* Don't hide - let timer handle it */ };
+    releaseSlider.onMouseExit = [this]() {
+        if (currentHoveredComponent == &releaseSlider) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+    };
     
     setupAdvSlider(holdSlider, 0.0, 500.0, "ms");
     holdSlider.onValueChange = [this] {
         audioProcessor.setHoldMs(static_cast<float>(holdSlider.getValue()));
         if (holdSlider.isMouseOverOrDragging()) {
-            juce::String text = helpModeActive ? getHelpText("HOLD") : juce::String(static_cast<int>(holdSlider.getValue())) + " ms";
-            valueTooltip.showValue("HOLD", text, &holdSlider, false, helpModeActive);
+            bool showHelp = (currentHoveredComponent == &holdSlider && hoverTimeCounter >= helpHoverDelayTicks);
+            juce::String text = showHelp ? getHelpText("HOLD") : juce::String(static_cast<int>(holdSlider.getValue())) + " ms";
+            valueTooltip.showValue("HOLD", text, &holdSlider, false, showHelp);
         }
     };
     holdSlider.onMouseEnter = [this]() {
-        juce::String text = helpModeActive ? getHelpText("HOLD") : juce::String(static_cast<int>(holdSlider.getValue())) + " ms";
-        valueTooltip.showValue("HOLD", text, &holdSlider, false, helpModeActive);
+        currentHoveredComponent = &holdSlider;
+        hoverTimeCounter = 0;
+        valueTooltip.showValue("HOLD", juce::String(static_cast<int>(holdSlider.getValue())) + " ms", &holdSlider);
     };
-    holdSlider.onMouseExit = []() { /* Don't hide - let timer handle it */ };
+    holdSlider.onMouseExit = [this]() {
+        if (currentHoveredComponent == &holdSlider) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+    };
     
     setupAdvSlider(breathReductionSlider, 0.0, 12.0, "dB");
     breathReductionSlider.onValueChange = [this] {
         audioProcessor.setBreathReduction(static_cast<float>(breathReductionSlider.getValue()));
         if (breathReductionSlider.isMouseOverOrDragging()) {
-            juce::String text = helpModeActive ? getHelpText("BREATH") : juce::String(breathReductionSlider.getValue(), 1) + " dB";
-            valueTooltip.showValue("BREATH", text, &breathReductionSlider, false, helpModeActive);
+            bool showHelp = (currentHoveredComponent == &breathReductionSlider && hoverTimeCounter >= helpHoverDelayTicks);
+            juce::String text = showHelp ? getHelpText("BREATH") : juce::String(breathReductionSlider.getValue(), 1) + " dB";
+            valueTooltip.showValue("BREATH", text, &breathReductionSlider, false, showHelp);
         }
     };
     breathReductionSlider.onMouseEnter = [this]() {
-        juce::String text = helpModeActive ? getHelpText("BREATH") : juce::String(breathReductionSlider.getValue(), 1) + " dB";
-        valueTooltip.showValue("BREATH", text, &breathReductionSlider, false, helpModeActive);
+        currentHoveredComponent = &breathReductionSlider;
+        hoverTimeCounter = 0;
+        valueTooltip.showValue("BREATH", juce::String(breathReductionSlider.getValue(), 1) + " dB", &breathReductionSlider);
     };
-    breathReductionSlider.onMouseExit = []() { /* Don't hide - let timer handle it */ };
+    breathReductionSlider.onMouseExit = [this]() {
+        if (currentHoveredComponent == &breathReductionSlider) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+    };
     
     setupAdvSlider(transientPreservationSlider, 0.0, 100.0, "%");
     transientPreservationSlider.onValueChange = [this] {
         audioProcessor.setTransientPreservation(static_cast<float>(transientPreservationSlider.getValue()) / 100.0f);
         if (transientPreservationSlider.isMouseOverOrDragging()) {
-            juce::String text = helpModeActive ? getHelpText("TRANSIENT") : juce::String(static_cast<int>(transientPreservationSlider.getValue())) + "%";
-            valueTooltip.showValue("TRANSIENT", text, &transientPreservationSlider, false, helpModeActive);
+            bool showHelp = (currentHoveredComponent == &transientPreservationSlider && hoverTimeCounter >= helpHoverDelayTicks);
+            juce::String text = showHelp ? getHelpText("TRANSIENT") : juce::String(static_cast<int>(transientPreservationSlider.getValue())) + "%";
+            valueTooltip.showValue("TRANSIENT", text, &transientPreservationSlider, false, showHelp);
         }
     };
     transientPreservationSlider.onMouseEnter = [this]() {
-        juce::String text = helpModeActive ? getHelpText("TRANSIENT") : juce::String(static_cast<int>(transientPreservationSlider.getValue())) + "%";
-        valueTooltip.showValue("TRANSIENT", text, &transientPreservationSlider, false, helpModeActive);
+        currentHoveredComponent = &transientPreservationSlider;
+        hoverTimeCounter = 0;
+        valueTooltip.showValue("TRANSIENT", juce::String(static_cast<int>(transientPreservationSlider.getValue())) + "%", &transientPreservationSlider);
     };
-    transientPreservationSlider.onMouseExit = []() { /* Don't hide - let timer handle it */ };
+    transientPreservationSlider.onMouseExit = [this]() {
+        if (currentHoveredComponent == &transientPreservationSlider) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+    };
     
     // Output Trim - AdjustableGainMeter style (similar to MiniGainMeter but adjustable)
     outputTrimMeter.setValue(0.0f);  // Start at 0 dB
     outputTrimMeter.onValueChanged = [this](float valueDb) {
         audioProcessor.setOutputTrim(valueDb);
-        // Show tooltip (save undo handled on mouse up)
+        bool showHelp = (currentHoveredComponent == &outputTrimMeter && hoverTimeCounter >= helpHoverDelayTicks);
         juce::String valStr = (valueDb >= 0 ? "+" : "") + juce::String(valueDb, 1) + " dB";
-        juce::String text = helpModeActive ? getHelpText("OUTPUT") : valStr;
-        valueTooltip.showValue("OUTPUT", text, &outputTrimMeter, false, helpModeActive);
+        juce::String text = showHelp ? getHelpText("OUTPUT") : valStr;
+        valueTooltip.showValue("OUTPUT", text, &outputTrimMeter, false, showHelp);
     };
     outputTrimMeter.onMouseEnter = [this]() {
+        currentHoveredComponent = &outputTrimMeter;
+        hoverTimeCounter = 0;
         float val = outputTrimMeter.getValue();
         juce::String valStr = (val >= 0 ? "+" : "") + juce::String(val, 1) + " dB";
-        juce::String text = helpModeActive ? getHelpText("OUTPUT") : valStr;
-        valueTooltip.showValue("OUTPUT", text, &outputTrimMeter, false, helpModeActive);
+        valueTooltip.showValue("OUTPUT", valStr, &outputTrimMeter);
     };
-    outputTrimMeter.onMouseExit = []() { /* Don't hide - let timer handle it */ };
+    outputTrimMeter.onMouseExit = [this]() {
+        if (currentHoveredComponent == &outputTrimMeter) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+    };
     addAndMakeVisible(outputTrimMeter);
     outputTrimMeter.setVisible(false);
     // Output Trim meter mouse enter/exit for tooltip
@@ -617,6 +698,23 @@ void VocalRiderAudioProcessorEditor::updateAdvancedControls()
     detectionModeComboBox.setSelectedId(audioProcessor.getUseLufs() ? 2 : 1, juce::dontSendNotification);
     breathReductionSlider.setValue(audioProcessor.getBreathReduction(), juce::dontSendNotification);
     transientPreservationSlider.setValue(audioProcessor.getTransientPreservation() * 100.0f, juce::dontSendNotification);
+    outputTrimMeter.setValue(audioProcessor.getOutputTrim());
+    
+    // Bottom bar UI state
+    silenceToggle.setToggleState(audioProcessor.isSmartSilenceEnabled(), juce::dontSendNotification);
+    automationModeComboBox.setSelectedId(static_cast<int>(audioProcessor.getAutomationMode()) + 1, juce::dontSendNotification);
+    
+    // Scroll speed restoration
+    float scrollSpeed = audioProcessor.getScrollSpeed();
+    waveformDisplay.setScrollSpeed(scrollSpeed);
+    if (scrollSpeed >= 0.45f) speedButton.setLabel("10s");
+    else if (scrollSpeed >= 0.28f) speedButton.setLabel("15s");
+    else speedButton.setLabel("20s");
+    
+    // Preset restoration
+    int presetIdx = audioProcessor.getCurrentPresetIndex();
+    if (presetIdx > 0)
+        presetComboBox.setSelectedId(presetIdx, juce::dontSendNotification);
 }
 
 void VocalRiderAudioProcessorEditor::toggleAdvancedPanel()
@@ -891,12 +989,12 @@ void VocalRiderAudioProcessorEditor::resized()
     int smallCenterY = (controlsArea.getHeight() - smallButtonSize) / 2;
     
     // From RIGHT to LEFT:
-    // Settings/Advanced button (rightmost - like FabFilter)
-    advancedButton.setBounds(controlsArea.removeFromRight(22).withY(smallCenterY).withHeight(smallButtonSize));
+    // Help/About button (rightmost - question mark)
+    helpButton.setBounds(controlsArea.removeFromRight(20).withY(smallCenterY).withHeight(smallButtonSize));
     controlsArea.removeFromRight(8);
     
-    // Help button (to the left of settings)
-    helpButton.setBounds(controlsArea.removeFromRight(20).withY(smallCenterY).withHeight(smallButtonSize));
+    // Settings/Advanced button (gear icon, to the left of help)
+    advancedButton.setBounds(controlsArea.removeFromRight(22).withY(smallCenterY).withHeight(smallButtonSize));
     controlsArea.removeFromRight(15);
     
     // Preset section: [◄] [Default Setting ▼] [►]
@@ -938,9 +1036,14 @@ void VocalRiderAudioProcessorEditor::resized()
     autoTargetButton.setBounds(toggleStartX + naturalW + btnGap + silenceW + btnGap, toggleY, autoTargetW, 18);
     speedButton.setBounds(toggleStartX + naturalW + btnGap + silenceW + btnGap + autoTargetW + btnGap, toggleY, speedW, 18);
     
+    // Automation mode selector (right side, before resize button)
+    int autoModeW = 70;
+    int autoModeH = 18;
+    int resizeSize = 14;
+    automationModeComboBox.setBounds(bottomArea.getWidth() - autoModeW - resizeSize - 16, toggleY, autoModeW, autoModeH);
+    
     // Resize button in bottom right corner (smaller icon)
     // Note: resizeButton is a child of bottomBar, so use local coordinates
-    int resizeSize = 14;
     resizeButton.setBounds(bottomArea.getWidth() - resizeSize - 8, 4, resizeSize, resizeSize);
     
     // Control panel at bottom (above bottom bar)
@@ -1075,6 +1178,27 @@ void VocalRiderAudioProcessorEditor::resized()
 
 void VocalRiderAudioProcessorEditor::timerCallback()
 {
+    // Automation mode pulsing animation when writing
+    if (audioProcessor.isAutomationWriting())
+    {
+        automationPulsePhase += 0.15f;
+        if (automationPulsePhase > juce::MathConstants<float>::twoPi)
+            automationPulsePhase -= juce::MathConstants<float>::twoPi;
+        
+        float pulse = 0.5f + 0.5f * std::sin(automationPulsePhase);
+        auto pulseColour = CustomLookAndFeel::getAccentColour().interpolatedWith(
+            CustomLookAndFeel::getAccentBrightColour(), pulse);
+        automationModeComboBox.setColour(juce::ComboBox::outlineColourId, pulseColour);
+        automationModeComboBox.setColour(juce::ComboBox::textColourId, pulseColour);
+    }
+    else
+    {
+        // Reset to normal colors when not writing
+        automationModeComboBox.setColour(juce::ComboBox::outlineColourId, CustomLookAndFeel::getDimTextColour().withAlpha(0.3f));
+        automationModeComboBox.setColour(juce::ComboBox::textColourId, CustomLookAndFeel::getTextColour());
+        automationPulsePhase = 0.0f;
+    }
+    
     waveformDisplay.setInputLevel(audioProcessor.getInputLevelDb());
     waveformDisplay.setOutputLevel(audioProcessor.getOutputLevelDb());
     
@@ -1151,6 +1275,45 @@ void VocalRiderAudioProcessorEditor::timerCallback()
         autoTargetButton.setPulsing(false);
     }
     
+    // Hover-based help tooltip: after hovering for 3 seconds, switch to help mode
+    if (currentHoveredComponent != nullptr)
+    {
+        hoverTimeCounter++;
+        
+        // When we hit exactly the delay threshold, update tooltip to show help text
+        if (hoverTimeCounter == helpHoverDelayTicks)
+        {
+            // Update the tooltip to show help text for the hovered component
+            if (currentHoveredComponent == &targetSlider) {
+                valueTooltip.showValue("TARGET", getHelpText("TARGET"), &targetSlider, false, true);
+            } else if (currentHoveredComponent == &rangeSlider) {
+                valueTooltip.showValue("RANGE", getHelpText("RANGE"), &rangeSlider, false, true);
+            } else if (currentHoveredComponent == &speedSlider) {
+                valueTooltip.showValue("SPEED", getHelpText("SPEED"), &speedSlider, false, true);
+            } else if (currentHoveredComponent == &attackSlider) {
+                valueTooltip.showValue("ATTACK", getHelpText("ATTACK"), &attackSlider, false, true);
+            } else if (currentHoveredComponent == &releaseSlider) {
+                valueTooltip.showValue("RELEASE", getHelpText("RELEASE"), &releaseSlider, false, true);
+            } else if (currentHoveredComponent == &holdSlider) {
+                valueTooltip.showValue("HOLD", getHelpText("HOLD"), &holdSlider, false, true);
+            } else if (currentHoveredComponent == &breathReductionSlider) {
+                valueTooltip.showValue("BREATH", getHelpText("BREATH"), &breathReductionSlider, false, true);
+            } else if (currentHoveredComponent == &transientPreservationSlider) {
+                valueTooltip.showValue("TRANSIENT", getHelpText("TRANSIENT"), &transientPreservationSlider, false, true);
+            } else if (currentHoveredComponent == &outputTrimMeter) {
+                valueTooltip.showValue("OUTPUT", getHelpText("OUTPUT"), &outputTrimMeter, false, true);
+            } else if (currentHoveredComponent == &naturalToggle) {
+                valueTooltip.showValue("NATURAL", getHelpText("NATURAL"), &naturalToggle, false, true);
+            } else if (currentHoveredComponent == &silenceToggle) {
+                valueTooltip.showValue("SILENCE", getHelpText("SILENCE"), &silenceToggle, false, true);
+            } else if (currentHoveredComponent == &autoTargetButton) {
+                valueTooltip.showValue("AUTO-TARGET", getHelpText("AUTOTARGET"), &autoTargetButton, false, true);
+            } else if (currentHoveredComponent == &speedButton) {
+                valueTooltip.showValue("SPEED", getHelpText("SPEED_BTN"), &speedButton, false, true);
+            }
+        }
+    }
+    
     // Hide tooltip when no slider is being interacted with
     bool anySliderActive = targetSlider.isMouseOverOrDragging() ||
                            rangeSlider.isMouseOverOrDragging() ||
@@ -1161,11 +1324,39 @@ void VocalRiderAudioProcessorEditor::timerCallback()
                            breathReductionSlider.isMouseOverOrDragging() ||
                            transientPreservationSlider.isMouseOverOrDragging() ||
                            outputTrimMeter.isMouseOver();
-    if (!anySliderActive && valueTooltip.isShowing())
+    if (!anySliderActive && valueTooltip.isShowing() && currentHoveredComponent == nullptr)
     {
         valueTooltip.hideTooltip();
     }
 
+}
+
+//==============================================================================
+// Keyboard shortcuts
+bool VocalRiderAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
+{
+    // Cmd+Z (Mac) or Ctrl+Z (Windows) = Undo
+    if (key.isKeyCode('Z') && key.getModifiers().isCommandDown() && !key.getModifiers().isShiftDown())
+    {
+        performUndo();
+        return true;
+    }
+    
+    // Cmd+Shift+Z (Mac) or Ctrl+Shift+Z (Windows) = Redo
+    if (key.isKeyCode('Z') && key.getModifiers().isCommandDown() && key.getModifiers().isShiftDown())
+    {
+        performRedo();
+        return true;
+    }
+    
+    // Cmd+Y (alternative Redo on Windows)
+    if (key.isKeyCode('Y') && key.getModifiers().isCommandDown())
+    {
+        performRedo();
+        return true;
+    }
+    
+    return false;  // Key not handled
 }
 
 //==============================================================================

@@ -584,14 +584,31 @@ public:
     {
         auto bounds = getLocalBounds().toFloat().reduced(3.0f);
         
-        juce::Colour iconColour = shouldDrawButtonAsHighlighted 
-            ? CustomLookAndFeel::getAccentColour().brighter(0.3f)
-            : (getToggleState() ? CustomLookAndFeel::getAccentColour() : CustomLookAndFeel::getDimTextColour());
+        bool isActive = getToggleState();
+        
+        // Draw glow circle behind icon when active
+        if (isActive)
+        {
+            auto glowBounds = bounds.expanded(1.0f);
+            g.setColour(CustomLookAndFeel::getAccentColour().withAlpha(0.35f));
+            g.fillEllipse(glowBounds);
+        }
+        
+        // Icon color based on state
+        juce::Colour iconColour;
+        if (isActive)
+            iconColour = CustomLookAndFeel::getAccentColour().brighter(0.6f);  // Bright purple when active
+        else if (shouldDrawButtonAsHighlighted)
+            iconColour = CustomLookAndFeel::getAccentColour();  // Purple on hover
+        else
+            iconColour = CustomLookAndFeel::getDimTextColour();  // Dim when inactive
         
         if (iconDrawable != nullptr)
         {
-            iconDrawable->replaceColour(juce::Colours::black, iconColour);
-            iconDrawable->drawWithin(g, bounds, juce::RectanglePlacement::centred, 1.0f);
+            // Create a copy and set its color to avoid caching issues
+            auto drawableCopy = iconDrawable->createCopy();
+            drawableCopy->replaceColour(juce::Colours::black, iconColour);
+            drawableCopy->drawWithin(g, bounds, juce::RectanglePlacement::centred, 1.0f);
         }
     }
     
@@ -1320,6 +1337,7 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
     void timerCallback() override;
+    bool keyPressed(const juce::KeyPress& key) override;
 
 private:
     // Window size presets (FabFilter-style)
@@ -1360,6 +1378,10 @@ private:
     juce::Component bottomBar;
     ResizeButton resizeButton;
     static constexpr int bottomBarHeight = 26;  // More padding
+    
+    // Automation mode selector (Read/Write/Touch/Latch)
+    juce::ComboBox automationModeComboBox;
+    float automationPulsePhase = 0.0f;  // For pulsing animation when writing
 
     //==============================================================================
     // Main waveform display (fills most of the window)
@@ -1391,9 +1413,13 @@ private:
     BottomBarIconButton speedButton { "10s", BottomBarIconButton::Speed };
     BottomBarIconButton autoTargetButton { "AUTO-TARGET", BottomBarIconButton::Auto };
     
-    // Help button (question mark toggle)
+    // Help button (visual indicator - no longer toggle-based)
     HelpButton helpButton;
-    bool helpModeActive = false;
+    
+    // Hover-based help tooltip tracking (shows help after 3 seconds of hovering)
+    juce::Component* currentHoveredComponent = nullptr;
+    int hoverTimeCounter = 0;  // Counts timer ticks while hovering
+    static constexpr int helpHoverDelayTicks = 90;  // 3 seconds at 30Hz timer
     
     // A/B Compare state storage
     struct ParameterState {

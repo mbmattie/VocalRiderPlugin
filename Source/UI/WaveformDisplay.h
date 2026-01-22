@@ -157,6 +157,7 @@ private:
     
     // RMS average for output meter
     float outputRmsDb = -100.0f;
+    float outputDisplayDb = -100.0f;  // Smoothed display value
     float rmsAccumulator = 0.0f;
     int rmsSampleCount = 0;
     

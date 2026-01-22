@@ -64,8 +64,10 @@ public:
     
     void positionComboBoxText(juce::ComboBox& box, juce::Label& label) override
     {
-        label.setBounds(8, 1, box.getWidth() - 24, box.getHeight() - 2);
-        label.setFont(getPluginFont(12.0f));
+        // Properly vertically centered text
+        label.setBounds(8, 0, box.getWidth() - 24, box.getHeight());
+        label.setFont(getPluginFont(11.0f));
+        label.setJustificationType(juce::Justification::centredLeft);
     }
 
     void drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,

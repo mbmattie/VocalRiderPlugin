@@ -41,7 +41,7 @@ juce_add_plugin(VocalRider
     FORMATS AU VST3 Standalone
     
     # Plugin name that appears in the DAW
-    PRODUCT_NAME "Vocal Rider"
+    PRODUCT_NAME "magic.RIDE"
     
     # Plugin characteristics
     IS_SYNTH FALSE

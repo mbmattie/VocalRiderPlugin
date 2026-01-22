@@ -77,7 +77,7 @@ public:
     float getInputLufs() const { return inputLufs.load(); }
 
     // Waveform display
-    void setWaveformDisplay(WaveformDisplay* display) { waveformDisplay = display; }
+    void setWaveformDisplay(WaveformDisplay* display) { waveformDisplay.store(display); }
 
     //==============================================================================
     // Auto-calibrate
@@ -124,9 +124,18 @@ public:
     void setOutputTrim(float trimDb) { outputTrimDb.store(juce::jlimit(-12.0f, 12.0f, trimDb)); }
     float getOutputTrim() const { return outputTrimDb.load(); }
     
+    // Scroll speed for waveform (saved in state)
+    void setScrollSpeed(float speed) { scrollSpeedSetting.store(speed); }
+    float getScrollSpeed() const { return scrollSpeedSetting.load(); }
+    
+    // Currently selected preset index (saved in state)
+    void setCurrentPresetIndex(int index) { currentPresetIndex.store(index); }
+    int getCurrentPresetIndex() const { return currentPresetIndex.load(); }
+    
     // Automation write mode
     void setAutomationMode(AutomationMode mode);
     AutomationMode getAutomationMode() const { return automationMode.load(); }
+    bool isAutomationWriting() const { return automationMode.load() != AutomationMode::Read; }
     float getGainOutputForAutomation() const { return gainOutputParam.load(); }
 
     void setAttackMs(float ms);
@@ -156,6 +165,7 @@ public:
     static const std::vector<Preset>& getFactoryPresets();
     static std::vector<juce::String> getPresetCategories();
     void loadPreset(int index);
+    void resetToDefaults();
 
     //==============================================================================
     // Parameter IDs
@@ -227,6 +237,10 @@ private:
     // Smart Silence
     std::atomic<bool> smartSilenceEnabled { false };
     
+    // UI state to persist
+    std::atomic<float> scrollSpeedSetting { 0.33f };  // Default to medium (15s)
+    std::atomic<int> currentPresetIndex { 0 };  // 0 = no preset selected
+    
     // Learning mode
     std::atomic<bool> isLearning { false };
     int learningSamples = 0;
@@ -282,6 +296,11 @@ private:
     std::atomic<float>* targetLevelParam = nullptr;
     std::atomic<float>* speedParam = nullptr;
     std::atomic<float>* rangeParam = nullptr;
+    
+    // Smoothed parameters (to prevent clicks/pops on rapid changes)
+    float smoothedTargetLevel = -18.0f;
+    float smoothedRange = 12.0f;
+    static constexpr float paramSmoothingCoeff = 0.85f;  // ~3ms at 44.1kHz - very fast response
 
     // Metering values (for UI)
     std::atomic<float> inputLevelDb { -100.0f };
@@ -291,8 +310,8 @@ private:
     // Speed tracking
     float lastSpeed = -1.0f;
 
-    // Waveform display (non-owning pointer, set by editor)
-    WaveformDisplay* waveformDisplay = nullptr;
+    // Waveform display (non-owning pointer, set by editor) - atomic for thread safety
+    std::atomic<WaveformDisplay*> waveformDisplay { nullptr };
 
     // Soft limiter
     static constexpr float ceilingDb = -0.3f;

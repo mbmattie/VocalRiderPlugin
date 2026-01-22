@@ -34,7 +34,9 @@ LevelMeter::LevelMeter(MeterType type)
             break;
     }
     
-    smoothingCoeff = std::exp(-1.0f / (0.05f * refreshRateHz));
+    // Slower smoothing for more stable, FabFilter-style metering
+    // 250ms time constant for smooth, readable meter movement
+    smoothingCoeff = std::exp(-1.0f / (0.25f * refreshRateHz));
     peakHoldSamples = static_cast<int>((peakHoldTimeMs / 1000.0f) * refreshRateHz);
     
     startTimerHz(refreshRateHz);
