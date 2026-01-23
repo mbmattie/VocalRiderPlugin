@@ -126,7 +126,7 @@ private:
     // Areas
     juce::Rectangle<float> waveformArea;
     static constexpr int handleAreaWidth = 0;   // No left panel, but target/range lines are still draggable
-    static constexpr int ioMeterWidth = 45;     // Narrower meters - transparent over waveform
+    static constexpr int ioMeterWidth = 32;     // Compact meter area for narrower meters
     
     // Waveform scroll speed (1.0 = normal, 0.5 = half speed, 2.0 = double speed)
     float scrollSpeed = 0.5f;  // Default to slower scrolling

@@ -91,4 +91,30 @@ target_link_libraries(VocalRider
         juce::juce_recommended_warning_flags
 )
 
-
+# ============================================================================
+# Auto-install plugins to system folders after build (macOS only)
+# ============================================================================
+if(APPLE)
+    # Define plugin destinations
+    set(AU_DEST "$ENV{HOME}/Library/Audio/Plug-Ins/Components")
+    set(VST3_DEST "$ENV{HOME}/Library/Audio/Plug-Ins/VST3")
+    
+    # Custom target to install plugins
+    add_custom_target(install_plugins
+        COMMAND ${CMAKE_COMMAND} -E echo "Installing magic.RIDE plugins..."
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${AU_DEST}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${VST3_DEST}"
+        COMMAND ${CMAKE_COMMAND} -E remove_directory "${AU_DEST}/magic.RIDE.component"
+        COMMAND ${CMAKE_COMMAND} -E remove_directory "${VST3_DEST}/magic.RIDE.vst3"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory 
+            "${CMAKE_BINARY_DIR}/VocalRider_artefacts/AU/magic.RIDE.component"
+            "${AU_DEST}/magic.RIDE.component"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_BINARY_DIR}/VocalRider_artefacts/VST3/magic.RIDE.vst3"
+            "${VST3_DEST}/magic.RIDE.vst3"
+        COMMAND ${CMAKE_COMMAND} -E echo "✓ Plugins installed to system folders"
+        COMMAND killall -9 AudioComponentRegistrar 2>/dev/null || true
+        DEPENDS VocalRider_AU VocalRider_VST3
+        COMMENT "Installing AU and VST3 plugins to system folders..."
+    )
+endif()

@@ -360,42 +360,160 @@ public:
     
     void paint(juce::Graphics& g) override
     {
-        auto bounds = getLocalBounds().toFloat().reduced(1.0f);
+        auto bounds = getLocalBounds().toFloat().reduced(2.0f);
         
-        // Background
-        g.setColour(CustomLookAndFeel::getSurfaceDarkColour());
-        g.fillRoundedRectangle(bounds, 3.0f);
+        // Calculate colors based on gain - smooth interpolation
+        float normalizedGain = juce::jlimit(-1.0f, 1.0f, currentGainDb / rangeDb);
         
-        // Border
-        g.setColour(CustomLookAndFeel::getBorderColour().withAlpha(0.5f));
-        g.drawRoundedRectangle(bounds, 3.0f, 0.5f);
+        juce::Colour boostColour(0xFF5BCEFA);   // Bright cyan
+        juce::Colour neutralColour = CustomLookAndFeel::getTextColour().withAlpha(0.6f);
+        juce::Colour cutColour(0xFFB080E0);     // Bright purple
         
-        // Center line (0 dB)
-        float centerY = bounds.getCentreY();
-        g.setColour(CustomLookAndFeel::getDimTextColour().withAlpha(0.3f));
-        g.fillRect(bounds.getX() + 2.0f, centerY - 0.5f, bounds.getWidth() - 4.0f, 1.0f);
-        
-        // Gain bar
-        if (rangeDb > 0.1f && std::abs(currentGainDb) > 0.1f)
+        // Smooth color interpolation
+        juce::Colour displayColour;
+        if (normalizedGain > 0.02f)
         {
-            float normalizedGain = juce::jlimit(-1.0f, 1.0f, currentGainDb / rangeDb);
-            float barHeight = std::abs(normalizedGain) * (bounds.getHeight() / 2.0f - 2.0f);
+            float t = juce::jmin(normalizedGain * 2.0f, 1.0f);
+            displayColour = neutralColour.interpolatedWith(boostColour, t);
+        }
+        else if (normalizedGain < -0.02f)
+        {
+            float t = juce::jmin(-normalizedGain * 2.0f, 1.0f);
+            displayColour = neutralColour.interpolatedWith(cutColour, t);
+        }
+        else
+        {
+            displayColour = neutralColour;
+        }
+        
+        // === CIRCULAR ARC INDICATOR (SPEEDOMETER - GAP AT BOTTOM) ===
+        // Using Path::addArc with explicit rectangle bounds for clarity
+        float arcRadius = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.40f;
+        float arcCenterX = bounds.getCentreX();
+        float arcCenterY = bounds.getCentreY() + 2.0f;
+        float arcThickness = 3.5f;
+        
+        // Arc bounds (the ellipse that the arc sits on)
+        auto arcBounds = juce::Rectangle<float>(
+            arcCenterX - arcRadius, arcCenterY - arcRadius,
+            arcRadius * 2.0f, arcRadius * 2.0f
+        );
+        
+        // Path::addArc uses radians from 12 o'clock, CLOCKWISE positive
+        // For gap at bottom: start at 7:30 (225° from 12), end at 4:30 (-225° or 135° from 12)
+        // Actually, addArc: 0 = 12 o'clock (top), positive = clockwise
+        // 7:30 position = 225° clockwise from 12 = 225° = 5π/4
+        // 4:30 position = 135° clockwise from 12 = 135° = 3π/4
+        // We want arc from 7:30 to 4:30 going the LONG way (through top)
+        // That means: start at 5π/4 (225°), go COUNTER-clockwise to 3π/4 (135°)
+        // In addArc terms: start = 5π/4, end = 3π/4 - 2π = -5π/4
+        
+        // Actually let's think simpler:
+        // 0 rad = 12 o'clock (top)
+        // π/2 = 3 o'clock (right)
+        // π = 6 o'clock (bottom)
+        // 3π/2 = 9 o'clock (left)
+        // 
+        // Gap at bottom means we skip around π (6 o'clock)
+        // Arc goes from about 5π/4 (7:30) counter-clockwise to 3π/4 (4:30)
+        // That's: 5π/4 → 3π/2 → 0 → π/2 → 3π/4 (the long way, 270°)
+        
+        // Gap at bottom (around 180° / π): arc from 7:30 clockwise through top to 4:30
+        // 7:30 = 225° = 5π/4, 4:30 = 135° = 3π/4
+        // Go clockwise: 225° → 270° → 315° → 0° → 45° → 90° → 135° (through top)
+        float arcStart = juce::MathConstants<float>::pi * 1.25f;    // 5π/4 = 225° = 7:30
+        float arcEnd = juce::MathConstants<float>::pi * 2.75f;      // 11π/4 = 495° = 4:30 (going clockwise)
+        
+        // Draw background arc (dim track)
+        juce::Path bgArc;
+        bgArc.addArc(arcBounds.getX(), arcBounds.getY(), 
+                     arcBounds.getWidth(), arcBounds.getHeight(),
+                     arcStart, arcEnd, true);
+        g.setColour(CustomLookAndFeel::getSurfaceColour().darker(0.15f));
+        g.strokePath(bgArc, juce::PathStrokeType(arcThickness, juce::PathStrokeType::curved,
+                                                  juce::PathStrokeType::rounded));
+        
+        // Draw semi-transparent circle inside the arc for better readability
+        float innerCircleRadius = arcRadius - arcThickness - 3.0f;
+        g.setColour(juce::Colours::black.withAlpha(0.4f));
+        g.fillEllipse(arcCenterX - innerCircleRadius, arcCenterY - innerCircleRadius,
+                      innerCircleRadius * 2.0f, innerCircleRadius * 2.0f);
+        
+        // Draw center tick mark (0 dB = TOP = 0 radians in addArc convention)
+        float centerTickAngle = 0.0f;  // 0 = top in addArc
+        // Convert to x,y: in addArc, 0 = top means we need to go UP from center
+        float tickInnerR = arcRadius - 5.0f;
+        float tickOuterR = arcRadius + 5.0f;
+        g.setColour(CustomLookAndFeel::getDimTextColour().withAlpha(0.6f));
+        // For addArc convention: x = center + r*sin(angle), y = center - r*cos(angle)
+        g.drawLine(arcCenterX, arcCenterY - tickInnerR,
+                   arcCenterX, arcCenterY - tickOuterR,
+                   1.5f);
+        
+        // Draw filled arc portion based on gain
+        if (std::abs(normalizedGain) > 0.01f)
+        {
+            // Center of arc is at top (0 radians)
+            // Total arc is 270° = 3π/2, half is 135° = 3π/4
+            float halfArc = juce::MathConstants<float>::pi * 0.75f;
             
-            if (currentGainDb > 0)
+            // In addArc: 0 = top, positive = clockwise
+            // Boost (positive gain): fill from top toward RIGHT (clockwise = positive)
+            // Cut (negative gain): fill from top toward LEFT (counter-clockwise = negative)
+            float fillAngle = normalizedGain * halfArc;
+            
+            juce::Path fillArc;
+            if (normalizedGain > 0)
             {
-                // Boost - draw upward from center (softer cyan-blue matching main meter gradient)
-                g.setColour(juce::Colour(0xFF60B8D0).withAlpha(0.85f));  // Desaturated cyan-blue
-                g.fillRoundedRectangle(bounds.getX() + 2.0f, centerY - barHeight, 
-                                        bounds.getWidth() - 4.0f, barHeight, 2.0f);
+                // Boost: from 0 (top) clockwise toward 3π/4 (right side, 4:30)
+                fillArc.addArc(arcBounds.getX(), arcBounds.getY(),
+                               arcBounds.getWidth(), arcBounds.getHeight(),
+                               0.0f, fillAngle, true);
             }
             else
             {
-                // Cut - draw downward from center (softer purple matching main meter gradient)
-                g.setColour(juce::Colour(0xFF9070B8).withAlpha(0.85f));  // Desaturated purple
-                g.fillRoundedRectangle(bounds.getX() + 2.0f, centerY,
-                                        bounds.getWidth() - 4.0f, barHeight, 2.0f);
+                // Cut: from negative angle back to 0 (top)
+                // fillAngle is negative, so this goes from fillAngle to 0
+                fillArc.addArc(arcBounds.getX(), arcBounds.getY(),
+                               arcBounds.getWidth(), arcBounds.getHeight(),
+                               fillAngle, 0.0f, true);
             }
+            
+            // Main arc fill
+            g.setColour(displayColour.withAlpha(0.95f));
+            g.strokePath(fillArc, juce::PathStrokeType(arcThickness, juce::PathStrokeType::curved,
+                                                        juce::PathStrokeType::rounded));
         }
+        
+        // === NUMBER DISPLAY (inside the dark circle) ===
+        juce::String gainText;
+        if (std::abs(currentGainDb) < 0.05f)
+        {
+            gainText = "0.0";
+        }
+        else
+        {
+            gainText = (currentGainDb > 0 ? "+" : "") + juce::String(currentGainDb, 1);
+        }
+        
+        // Draw the number - centered in the inner circle
+        g.setFont(CustomLookAndFeel::getPluginFont(12.0f, true));
+        g.setColour(displayColour);
+        
+        auto textBounds = juce::Rectangle<float>(
+            bounds.getX(), arcCenterY - 7.0f,
+            bounds.getWidth(), 14.0f
+        );
+        g.drawText(gainText, textBounds.toNearestInt(), juce::Justification::centred);
+        
+        // Small "dB" label below
+        g.setFont(CustomLookAndFeel::getPluginFont(7.0f, false));
+        g.setColour(CustomLookAndFeel::getDimTextColour().withAlpha(0.5f));
+        auto dbBounds = juce::Rectangle<float>(
+            bounds.getX(), arcCenterY + 5.0f,
+            bounds.getWidth(), 10.0f
+        );
+        g.drawText("dB", dbBounds.toNearestInt(), juce::Justification::centred);
     }
     
 private:
@@ -586,12 +704,29 @@ public:
         
         bool isActive = getToggleState();
         
-        // Draw glow circle behind icon when active
+        // Draw glowing purple circle outline when active
         if (isActive)
         {
-            auto glowBounds = bounds.expanded(1.0f);
-            g.setColour(CustomLookAndFeel::getAccentColour().withAlpha(0.35f));
-            g.fillEllipse(glowBounds);
+            // Calculate perfect circle dimensions
+            float size = juce::jmin(bounds.getWidth(), bounds.getHeight()) + 4.0f;
+            auto circleBounds = juce::Rectangle<float>(
+                bounds.getCentreX() - size / 2.0f,
+                bounds.getCentreY() - size / 2.0f,
+                size, size
+            );
+            
+            // Outer glow layers for smooth glow effect
+            for (int i = 3; i >= 1; --i)
+            {
+                float expand = static_cast<float>(i) * 2.0f;
+                float alpha = 0.12f / static_cast<float>(i);
+                g.setColour(CustomLookAndFeel::getAccentColour().withAlpha(alpha));
+                g.drawEllipse(circleBounds.expanded(expand), 1.5f);
+            }
+            
+            // Main purple circle outline
+            g.setColour(CustomLookAndFeel::getAccentColour().withAlpha(0.7f));
+            g.drawEllipse(circleBounds, 1.5f);
         }
         
         // Icon color based on state
@@ -1238,7 +1373,7 @@ public:
         // Only respond to clicks on MBM AUDIO section
         if (e.mouseWasClicked() && isOverMBMAudio(e.getPosition()))
         {
-            juce::URL("https://musicbymattie.com").launchInDefaultBrowser();
+            juce::URL("https://musicbymattie.com/magic-ride").launchInDefaultBrowser();
         }
     }
     
@@ -1379,8 +1514,9 @@ private:
     ResizeButton resizeButton;
     static constexpr int bottomBarHeight = 26;  // More padding
     
-    // Automation mode selector (Read/Write/Touch/Latch)
+    // Automation mode selector (Off/Read/Touch/Latch/Write)
     juce::ComboBox automationModeComboBox;
+    juce::Label automationLabel;  // "AUTO" label next to dropdown
     float automationPulsePhase = 0.0f;  // For pulsing animation when writing
 
     //==============================================================================

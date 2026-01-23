@@ -393,6 +393,19 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     
     // === AUTOMATION MODE ===
     AutomationMode autoMode = automationMode.load();
+    
+    // === READ MODE: Use DAW automation instead of internal calculation ===
+    float automationGainDb = 0.0f;
+    bool useAutomationGain = (autoMode == AutomationMode::Read);
+    if (useAutomationGain)
+    {
+        // Read the gain value from the DAW automation parameter
+        if (auto* param = apvts.getParameter(gainOutputParamId))
+        {
+            float normalizedValue = param->getValue();  // 0-1 from DAW
+            automationGainDb = param->convertFrom0to1(normalizedValue);  // Convert to dB
+        }
+    }
 
     // Auto-calibrate
     if (autoCalibrating.load())
@@ -585,6 +598,12 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             }
         }
         
+        // === READ MODE: Override calculated gain with DAW automation ===
+        if (useAutomationGain)
+        {
+            targetGainDb = automationGainDb;  // Use the gain from DAW automation
+        }
+        
         float smoothedGainDb = gainSmoother.processSample(targetGainDb);
         
         gainSamples[static_cast<size_t>(sample)] = smoothedGainDb;
@@ -615,14 +634,14 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 
                 // Read delayed sample and apply the pre-computed gain
                 float delayedSample = delayData[readPos];
-                float gain = lookAheadBufferFilled ? lookAheadGainBuffer[static_cast<size_t>(readPos)] : 1.0f;
+                // Use precomputed gain immediately if buffer not filled yet (don't wait)
+                float gain = lookAheadBufferFilled ? lookAheadGainBuffer[static_cast<size_t>(readPos)] 
+                                                   : precomputedGains[static_cast<size_t>(sample)];
                 
                 float processed;
                 if (doTransientPreservation && transientPres > 0.0f)
                 {
                     // Preserve transients: blend between full gain and unity
-                    float transientPart, sustainPart;
-                    separateTransientSustain(delayedSample, transientPart, sustainPart);
                     float blendedGain = 1.0f + (gain - 1.0f) * (1.0f - transientPres);
                     processed = delayedSample * blendedGain;
                 }
@@ -643,7 +662,7 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     }
     else
     {
-        // NORMAL PROCESSING (no look-ahead)
+        // NORMAL PROCESSING (no look-ahead) - DIRECT GAIN APPLICATION
         for (int sample = 0; sample < numSamples; ++sample)
         {
             float gainLinear = precomputedGains[static_cast<size_t>(sample)];
@@ -656,17 +675,13 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 
                 if (doTransientPreservation && transientPres > 0.0f)
                 {
-                    // Separate transient and sustain, only apply gain to sustain
-                    float transientPart, sustainPart;
-                    separateTransientSustain(inputSample, transientPart, sustainPart);
-                    
-                    // Preserve transients, ride the sustain
+                    // Blend between unity and full gain based on transient preservation
                     float blendedGain = 1.0f + (gainLinear - 1.0f) * (1.0f - transientPres);
-                    processed = transientPart + sustainPart * gainLinear;
-                    processed = inputSample * blendedGain;  // Blend based on preservation amount
+                    processed = inputSample * blendedGain;
                 }
                 else
                 {
+                    // Standard gain application
                     processed = inputSample * gainLinear;
                 }
                 
@@ -682,41 +697,70 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // Update the gain output parameter for DAW automation
     gainOutputParam.store(finalGainDb);
     
-    if (autoMode != AutomationMode::Read && gainOutputParamPtr != nullptr)
+    // Only write automation in Touch/Latch/Write modes (not Off or Read)
+    bool shouldWriteAutomation = (autoMode == AutomationMode::Touch || 
+                                   autoMode == AutomationMode::Latch || 
+                                   autoMode == AutomationMode::Write);
+    
+    if (shouldWriteAutomation)
     {
         // Write the computed gain to the automatable parameter
         if (auto* param = apvts.getParameter(gainOutputParamId))
         {
             float normalizedGain = param->convertTo0to1(finalGainDb);
+            bool shouldWrite = false;
             
             switch (autoMode)
             {
                 case AutomationMode::Write:
-                    // Continuous write
-                    param->setValueNotifyingHost(normalizedGain);
+                    // Continuous write - ALWAYS output, no threshold
+                    shouldWrite = true;
                     break;
                     
                 case AutomationMode::Latch:
-                    // Write once touched, continue until stopped
-                    if (automationWriteActive || std::abs(finalGainDb) > 0.1f)
+                    // Write once any gain change occurs, then continue
+                    if (automationWriteActive || std::abs(finalGainDb) > 0.05f)
                     {
-                        param->setValueNotifyingHost(normalizedGain);
+                        shouldWrite = true;
                         automationWriteActive = true;
                     }
                     break;
                     
                 case AutomationMode::Touch:
-                    // Only write when gain is changing significantly
-                    if (std::abs(finalGainDb) > 0.1f)
-                    {
-                        param->setValueNotifyingHost(normalizedGain);
-                    }
+                    // Write when there's any meaningful gain change
+                    shouldWrite = (std::abs(finalGainDb) > 0.05f);
                     break;
                     
+                case AutomationMode::Off:
                 case AutomationMode::Read:
-                    // Read mode - do nothing (should not reach here due to outer if)
                     break;
             }
+            
+            if (shouldWrite)
+            {
+                // Signal gesture start if not already writing
+                if (!automationGestureActive)
+                {
+                    param->beginChangeGesture();
+                    automationGestureActive = true;
+                }
+                param->setValueNotifyingHost(normalizedGain);
+            }
+            else if (automationGestureActive && autoMode == AutomationMode::Touch)
+            {
+                // End gesture when Touch mode stops writing
+                param->endChangeGesture();
+                automationGestureActive = false;
+            }
+        }
+    }
+    else if (automationGestureActive)
+    {
+        // End any active gesture when switching away from write modes
+        if (auto* param = apvts.getParameter(gainOutputParamId))
+        {
+            param->endChangeGesture();
+            automationGestureActive = false;
         }
     }
 
@@ -754,11 +798,11 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         display->setTargetLevel(targetLevel);
     }
 
-    // Output metering
-    float outputRms = buffer.getRMSLevel(0, 0, numSamples);
+    // Output metering - use PEAK for display (matches DAW meters)
+    float outputPeak = buffer.getMagnitude(0, 0, numSamples);
     if (totalNumInputChannels > 1)
-        outputRms = (outputRms + buffer.getRMSLevel(1, 0, numSamples)) * 0.5f;
-    outputLevelDb.store(juce::Decibels::gainToDecibels(outputRms, -100.0f));
+        outputPeak = juce::jmax(outputPeak, buffer.getMagnitude(1, 0, numSamples));
+    outputLevelDb.store(juce::Decibels::gainToDecibels(outputPeak, -100.0f));
 }
 
 //==============================================================================
@@ -913,8 +957,21 @@ void VocalRiderAudioProcessor::setTransientPreservation(float amount)
 
 void VocalRiderAudioProcessor::setAutomationMode(AutomationMode mode)
 {
+    AutomationMode oldMode = automationMode.load();
     automationMode.store(mode);
-    automationWriteActive = (mode != AutomationMode::Read);
+    
+    // End any active gesture when switching modes
+    if (automationGestureActive && mode != oldMode)
+    {
+        if (auto* param = apvts.getParameter(gainOutputParamId))
+        {
+            param->endChangeGesture();
+        }
+        automationGestureActive = false;
+    }
+    
+    // Reset write active flag when switching modes
+    automationWriteActive = false;
 }
 
 //==============================================================================
@@ -1099,7 +1156,7 @@ void VocalRiderAudioProcessor::resetToDefaults()
     outputTrimDb.store(0.0f);
     lookAheadMode.store(0);
     useLufsMode.store(false);
-    automationMode.store(AutomationMode::Read);
+    automationMode.store(AutomationMode::Off);  // Default to Off (internal gain calculation, no automation I/O)
 }
 
 //==============================================================================

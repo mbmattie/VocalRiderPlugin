@@ -355,11 +355,13 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     };
     addAndMakeVisible(speedButton);
     
-    // Automation mode selector (Read/Write/Touch/Latch) - for DAW automation
-    automationModeComboBox.addItem("READ", 1);
-    automationModeComboBox.addItem("WRITE", 2);
-    automationModeComboBox.addItem("TOUCH", 3);
-    automationModeComboBox.addItem("LATCH", 4);
+    // Automation mode selector - matches enum order!
+    // Enum: Off=0, Read=1, Touch=2, Latch=3, Write=4
+    automationModeComboBox.addItem("OFF", 1);     // ID 1 = mode 0 = Off
+    automationModeComboBox.addItem("READ", 2);    // ID 2 = mode 1 = Read
+    automationModeComboBox.addItem("TOUCH", 3);   // ID 3 = mode 2 = Touch
+    automationModeComboBox.addItem("LATCH", 4);   // ID 4 = mode 3 = Latch
+    automationModeComboBox.addItem("WRITE", 5);   // ID 5 = mode 4 = Write
     automationModeComboBox.setSelectedId(static_cast<int>(audioProcessor.getAutomationMode()) + 1, juce::dontSendNotification);
     automationModeComboBox.onChange = [this] {
         int mode = automationModeComboBox.getSelectedId() - 1;
@@ -369,6 +371,13 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     automationModeComboBox.setColour(juce::ComboBox::textColourId, CustomLookAndFeel::getTextColour());
     automationModeComboBox.setColour(juce::ComboBox::outlineColourId, CustomLookAndFeel::getDimTextColour().withAlpha(0.3f));
     addAndMakeVisible(automationModeComboBox);
+    
+    // Automation label next to dropdown
+    automationLabel.setText("AUTO", juce::dontSendNotification);
+    automationLabel.setFont(CustomLookAndFeel::getPluginFont(8.0f, true));
+    automationLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getDimTextColour());
+    automationLabel.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(automationLabel);
     
     // Natural toggle - hover tracking for help tooltip
     naturalToggle.onMouseEnter = [this]() {
@@ -1037,10 +1046,13 @@ void VocalRiderAudioProcessorEditor::resized()
     speedButton.setBounds(toggleStartX + naturalW + btnGap + silenceW + btnGap + autoTargetW + btnGap, toggleY, speedW, 18);
     
     // Automation mode selector (right side, before resize button)
-    int autoModeW = 70;
+    int autoModeW = 65;
     int autoModeH = 18;
+    int autoLabelW = 30;
     int resizeSize = 14;
-    automationModeComboBox.setBounds(bottomArea.getWidth() - autoModeW - resizeSize - 16, toggleY, autoModeW, autoModeH);
+    int autoModeX = bottomArea.getWidth() - autoModeW - resizeSize - 16;
+    automationModeComboBox.setBounds(autoModeX, toggleY, autoModeW, autoModeH);
+    automationLabel.setBounds(autoModeX - autoLabelW - 4, toggleY, autoLabelW, autoModeH);
     
     // Resize button in bottom right corner (smaller icon)
     // Note: resizeButton is a child of bottomBar, so use local coordinates
@@ -1141,8 +1153,8 @@ void VocalRiderAudioProcessorEditor::resized()
     int targetKnobSize = 95;   // Even larger target knob
     int smallKnobSize = 72;    // Larger side knobs  
     int labelHeight = 12;
-    int miniMeterWidth = 18;
-    int miniMeterHeight = 60;
+    int miniMeterWidth = 58;   // Square-ish for circular arc
+    int miniMeterHeight = 58;  // Same as width for proper arc
     
     int centerX = ctrlContent.getCentreX();
     int knobY = ctrlContent.getY();
@@ -1168,10 +1180,10 @@ void VocalRiderAudioProcessorEditor::resized()
     speedSlider.setBounds(speedX, knobY + 8, smallKnobSize, smallKnobSize);
     speedLabel.setBounds(speedX, knobY + 8 + smallKnobSize + 2, smallKnobSize, labelHeight);
     
-    // Mini gain meter to the right of speed knob
-    int gainMeterX = speedX + smallKnobSize + 16;
+    // Mini gain meter to the right of speed knob (with numerical readout)
+    int gainMeterX = speedX + smallKnobSize + 12;
     miniGainMeter.setBounds(gainMeterX, knobY + 8, miniMeterWidth, miniMeterHeight);
-    gainMeterLabel.setBounds(gainMeterX - 5, knobY + 8 + miniMeterHeight + 2, miniMeterWidth + 10, labelHeight);
+    gainMeterLabel.setBounds(gainMeterX, knobY + 8 + miniMeterHeight + 2, miniMeterWidth, labelHeight);
     
     // Natural and Silence toggles now in bottom bar (positioned elsewhere)
 }

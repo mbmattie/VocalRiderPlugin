@@ -44,18 +44,19 @@ void WaveformDisplay::resized()
 }
 
 //==============================================================================
-// Coordinate conversions - LOGARITHMIC scale for waveform
+// Coordinate conversions - dB scale for waveform (matches grid/DAW meters)
 
 float WaveformDisplay::linearToLogY(float linear) const
 {
-    // Convert linear (0-1) to logarithmic Y position
-    // This compresses the top and expands the bottom for better visibility of quiet parts
-    if (linear <= 0.0001f) return waveformArea.getBottom();
+    // Convert linear amplitude (0-1) to Y position using STANDARD dB conversion
+    // This ensures the waveform aligns with the dB grid and matches DAW peak meters
+    if (linear <= 0.00001f) return waveformArea.getBottom();
     
-    // Logarithmic mapping: more space for quiet signals
-    float logValue = std::log10(linear * 9.0f + 1.0f);  // log10(1 to 10) = 0 to 1
-    float height = waveformArea.getHeight() * 0.9f;
-    return waveformArea.getBottom() - logValue * height;
+    // Convert linear amplitude to dB (standard peak metering formula)
+    float db = 20.0f * std::log10(linear);
+    
+    // Use the same dB-to-Y mapping as the grid for perfect alignment
+    return dbToY(db);
 }
 
 float WaveformDisplay::dbToY(float db) const
@@ -520,15 +521,15 @@ void WaveformDisplay::drawGridLines(juce::Graphics& g)
             bool isMajor = (static_cast<int>(db) % 12 == 0);
             float alpha = isMajor ? 0.30f : 0.12f;
             g.setColour(juce::Colour(0xFF555566).withAlpha(alpha));
-            g.drawHorizontalLine(static_cast<int>(y), 0.0f, bounds.getRight() - 30.0f);
+            g.drawHorizontalLine(static_cast<int>(y), 0.0f, bounds.getRight() - 50.0f);
             
             // dB label to the LEFT of meters
             float meterLeftEdge = bounds.getRight() - static_cast<float>(ioMeterWidth);
             g.setColour(CustomLookAndFeel::getDimTextColour().withAlpha(isMajor ? 0.9f : 0.6f));
             g.drawText(juce::String(static_cast<int>(db)),
-                       static_cast<int>(meterLeftEdge - 28),
+                       static_cast<int>(meterLeftEdge - 34),
                        static_cast<int>(y - 7),
-                       26, 14, juce::Justification::centredRight);
+                       28, 14, juce::Justification::centredRight);
         }
     }
     
@@ -1072,7 +1073,7 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
     
     // Two narrow meters: Output level (left) and Gain change (right)
     float meterGap = 12.0f;  // More spacing between meters
-    float singleMeterWidth = 10.0f;
+    float singleMeterWidth = 7.0f;  // Narrower meters
     
     // Position meters on the right side with more gap
     float metersRight = meterArea.getRight() - 4.0f;
@@ -1104,25 +1105,25 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
     // ========== OUTPUT METER ==========
     float outputDb = outputLevelDb.load();
     
-    // Simple, reliable metering: follow input with moderate smoothing
+    // Peak-catching metering: very fast attack, moderate release
     if (outputDb > -60.0f)
     {
-        // Signal present: smooth towards current value
+        // Signal present
         if (outputDb > outputDisplayDb)
         {
-            // Fast attack
-            outputDisplayDb = outputDisplayDb + (outputDb - outputDisplayDb) * 0.5f;
+            // Near-instant attack to catch peaks (0.9 = very fast, almost instant)
+            outputDisplayDb = outputDisplayDb + (outputDb - outputDisplayDb) * 0.9f;
         }
         else
         {
-            // Moderate release
-            outputDisplayDb = outputDisplayDb + (outputDb - outputDisplayDb) * 0.15f;
+            // Moderate release for smooth visual decay
+            outputDisplayDb = outputDisplayDb + (outputDb - outputDisplayDb) * 0.12f;
         }
     }
     else
     {
-        // No signal: decay towards silence (subtract dB directly)
-        outputDisplayDb -= 3.0f;  // 3 dB per frame = fast decay to silence
+        // No signal: decay towards silence
+        outputDisplayDb -= 2.0f;  // Slightly slower decay to silence
         if (outputDisplayDb < -60.0f) 
             outputDisplayDb = -100.0f;
     }
@@ -1159,29 +1160,58 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
         g.fillRoundedRectangle(rmsBounds, 2.0f);
     }
     
-    // Draw main output meter
+    // Draw main output meter - SMOOTH GRADIENT style (FabFilter inspired)
     float barHeight = outputNorm * meterHeight;
-    if (barHeight > 0.5f)
+    
+    if (barHeight > 1.0f)
     {
+        // Create the meter bar bounds
         auto barBounds = juce::Rectangle<float>(
-            outputMeterBounds.getX(), 
+            outputMeterBounds.getX(),
             outputMeterBounds.getBottom() - barHeight,
-            singleMeterWidth, 
+            singleMeterWidth,
             barHeight
         );
         
+        // Smooth gradient from green (bottom) to red (top)
         juce::ColourGradient meterGradient(
-            juce::Colour(0xFF4CAF50), barBounds.getX(), outputMeterBounds.getBottom(),
-            juce::Colour(0xFFFF5252), barBounds.getX(), outputMeterBounds.getY(),
+            juce::Colour(0xFF4CAF50),  // Green at bottom
+            outputMeterBounds.getX(), outputMeterBounds.getBottom(),
+            juce::Colour(0xFFFF5252),  // Red at top
+            outputMeterBounds.getX(), outputMeterBounds.getY(),
             false
         );
-        meterGradient.addColour(0.6, juce::Colour(0xFF8BC34A));
-        meterGradient.addColour(0.8, juce::Colour(0xFFFFEB3B));
-        meterGradient.addColour(0.9, juce::Colour(0xFFFF9800));
+        // Add intermediate colors for smooth transition
+        meterGradient.addColour(0.5, juce::Colour(0xFF8BC34A));   // Light green
+        meterGradient.addColour(0.7, juce::Colour(0xFFFFEB3B));   // Yellow
+        meterGradient.addColour(0.85, juce::Colour(0xFFFF9800));  // Orange
+        meterGradient.addColour(0.95, juce::Colour(0xFFFF5252));  // Red
         
         g.setGradientFill(meterGradient);
         g.fillRoundedRectangle(barBounds, 2.0f);
+        
+        // Add subtle inner glow/highlight at the top of the bar
+        float glowHeight = juce::jmin(8.0f, barHeight);
+        auto glowBounds = juce::Rectangle<float>(
+            barBounds.getX() + 1.0f,
+            barBounds.getY(),
+            barBounds.getWidth() - 2.0f,
+            glowHeight
+        );
+        g.setColour(juce::Colours::white.withAlpha(0.15f));
+        g.fillRoundedRectangle(glowBounds, 1.5f);
     }
+    
+    // Draw faint background gradient (shows meter scale even when quiet)
+    juce::ColourGradient bgGradient(
+        juce::Colour(0xFF4CAF50).withAlpha(0.06f),
+        outputMeterBounds.getX(), outputMeterBounds.getBottom(),
+        juce::Colour(0xFFFF5252).withAlpha(0.06f),
+        outputMeterBounds.getX(), outputMeterBounds.getY(),
+        false
+    );
+    g.setGradientFill(bgGradient);
+    g.fillRoundedRectangle(outputMeterBounds, 2.0f);
     
     // Peak hold logic (output)
     if (outputDb > outputPeakHoldDb)
@@ -1253,52 +1283,69 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
         if (std::abs(gainPeakHoldDb) < 0.1f) gainPeakHoldDb = 0.0f;
     }
     
-    // Gain meter: center = 0dB, up = boost, down = cut
-    // Uses gradient: electric blue at top -> purple at bottom
+    // Gain meter: center = 0dB, up = boost, down = cut - VERTICAL GRADIENT
     float gainMeterCenter = gainMeterBounds.getCentreY();
     float maxGainDisplay = 12.0f;  // Max display ±12dB
+    float halfHeight = meterHeight / 2.0f - 2.0f;
     
-    // Draw center line (subtle)
-    g.setColour(CustomLookAndFeel::getDimTextColour().withAlpha(0.2f));
+    // Colors
+    juce::Colour boostColour(0xFF5BCEFA);  // Bright cyan for boost
+    juce::Colour cutColour(0xFFB080E0);     // Bright purple for cut
+    
+    // Dark background
+    g.setColour(CustomLookAndFeel::getSurfaceColour().darker(0.4f));
+    g.fillRoundedRectangle(gainMeterBounds, 2.0f);
+    
+    // Draw center line (0 dB marker)
+    g.setColour(CustomLookAndFeel::getDimTextColour().withAlpha(0.5f));
     g.fillRect(gainMeterBounds.getX(), gainMeterCenter - 0.5f, singleMeterWidth, 1.0f);
     
-    // Draw gain bar with gradient (blue top to purple bottom)
-    if (std::abs(gainDb) > 0.1f)
+    // Draw filled bar with vertical gradient
+    float gainNorm = juce::jlimit(-1.0f, 1.0f, gainDb / maxGainDisplay);
+    
+    if (std::abs(gainNorm) > 0.01f)
     {
-        float gainNorm = juce::jlimit(-1.0f, 1.0f, gainDb / maxGainDisplay);
-        float gainBarHeight = std::abs(gainNorm) * (meterHeight / 2.0f);
+        float gainBarHeight = std::abs(gainNorm) * halfHeight;
+        juce::Colour barColour = (gainNorm > 0) ? boostColour : cutColour;
         
         juce::Rectangle<float> gainBar;
         if (gainNorm > 0)
         {
             // Boost: draw upward from center
             gainBar = juce::Rectangle<float>(
-                gainMeterBounds.getX(), 
+                gainMeterBounds.getX() + 1.0f,
                 gainMeterCenter - gainBarHeight,
-                singleMeterWidth, 
+                singleMeterWidth - 2.0f,
                 gainBarHeight
             );
+            
+            // Gradient: brighter at top (away from center), slightly darker at bottom (near center)
+            juce::ColourGradient gradient(
+                barColour.withAlpha(0.95f), gainBar.getX(), gainBar.getY(),
+                barColour.darker(0.15f).withAlpha(0.8f), gainBar.getX(), gainBar.getBottom(),
+                false
+            );
+            g.setGradientFill(gradient);
         }
         else
         {
             // Cut: draw downward from center
             gainBar = juce::Rectangle<float>(
-                gainMeterBounds.getX(), 
+                gainMeterBounds.getX() + 1.0f,
                 gainMeterCenter,
-                singleMeterWidth, 
+                singleMeterWidth - 2.0f,
                 gainBarHeight
             );
+            
+            // Gradient: slightly darker at top (near center), brighter at bottom (away from center)
+            juce::ColourGradient gradient(
+                barColour.darker(0.15f).withAlpha(0.8f), gainBar.getX(), gainBar.getY(),
+                barColour.withAlpha(0.95f), gainBar.getX(), gainBar.getBottom(),
+                false
+            );
+            g.setGradientFill(gradient);
         }
         
-        // Gradient: softer cyan-blue at top -> softer purple at bottom
-        juce::ColourGradient gainGrad(
-            juce::Colour(0xFF60B8D0),  // Desaturated cyan-blue at top
-            gainMeterBounds.getX(), gainMeterBounds.getY(),
-            juce::Colour(0xFF9070B8),  // Desaturated purple at bottom
-            gainMeterBounds.getX(), gainMeterBounds.getBottom(),
-            false
-        );
-        g.setGradientFill(gainGrad);
         g.fillRoundedRectangle(gainBar, 1.5f);
     }
     

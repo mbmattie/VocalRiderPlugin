@@ -27,8 +27,11 @@ class VocalRiderAudioProcessor : public juce::AudioProcessor
 {
 public:
     //==============================================================================
-    // Automation write modes
-    enum class AutomationMode { Read = 0, Touch, Latch, Write };
+    // Automation modes
+    // Off: Plugin calculates gain internally, no automation I/O
+    // Read: Plugin reads automation from DAW and applies that gain (no internal calculation)
+    // Touch/Latch/Write: Plugin calculates gain and writes to DAW automation
+    enum class AutomationMode { Off = 0, Read, Touch, Latch, Write };
     
     //==============================================================================
     VocalRiderAudioProcessor();
@@ -135,7 +138,11 @@ public:
     // Automation write mode
     void setAutomationMode(AutomationMode mode);
     AutomationMode getAutomationMode() const { return automationMode.load(); }
-    bool isAutomationWriting() const { return automationMode.load() != AutomationMode::Read; }
+    bool isAutomationWriting() const { 
+        auto mode = automationMode.load();
+        return mode == AutomationMode::Touch || mode == AutomationMode::Latch || mode == AutomationMode::Write;
+    }
+    bool isAutomationReading() const { return automationMode.load() == AutomationMode::Read; }
     float getGainOutputForAutomation() const { return gainOutputParam.load(); }
 
     void setAttackMs(float ms);
@@ -287,10 +294,11 @@ private:
     
     //==============================================================================
     // Automation write
-    std::atomic<AutomationMode> automationMode { AutomationMode::Read };
+    std::atomic<AutomationMode> automationMode { AutomationMode::Off };  // Default to Off
     std::atomic<float> gainOutputParam { 0.0f };
     std::atomic<float>* gainOutputParamPtr = nullptr;
     bool automationWriteActive = false;
+    bool automationGestureActive = false;  // Track if we've called beginChangeGesture()
 
     // Cached parameters
     std::atomic<float>* targetLevelParam = nullptr;
