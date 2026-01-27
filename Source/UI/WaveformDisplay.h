@@ -6,11 +6,10 @@
     Author:  MBM Audio
 
     FabFilter Pro-C inspired waveform display with:
+    - Image-based scrolling for ultra-smooth animation
     - Half-waveform with logarithmic scale
-    - Ghost waveform showing original before gain
     - Separate boost/cut range handles
     - Clipping indicator
-    - Fading gain curve
 
   ==============================================================================
 */
@@ -59,9 +58,7 @@ public:
     // Combined range setter (for backwards compat)
     void setRange(float rangeDb);
     
-    // Waveform scroll speed (0.25 = slow, 0.5 = normal, 1.0 = fast)
-    void setScrollSpeed(float speed) { scrollSpeed = juce::jlimit(0.1f, 2.0f, speed); }
-    float getScrollSpeed() const { return scrollSpeed; }
+    // Scroll speed is now fixed at 8 seconds
     
     // Current gain for external access
     void setCurrentGain(float gainDb) { currentGainDb = gainDb; }
@@ -73,6 +70,11 @@ public:
     std::function<void(float)> onCutRangeChanged;
     std::function<void(float)> onRangeChanged;  // Legacy
 
+    //==============================================================================
+    // Natural Mode phrase state (for visual feedback)
+    void setNaturalModeEnabled(bool enabled) { naturalModeActive = enabled; }
+    void setInPhrase(bool inPhrase) { phraseActive = inPhrase; }
+    
     //==============================================================================
     // I/O Levels
     void setInputLevel(float db) { inputLevelDb.store(db); }
@@ -90,54 +92,86 @@ private:
     //==============================================================================
     struct SampleData
     {
-        float inputPeak = 0.0f;     // Peak level (0-1)
-        float outputPeak = 0.0f;    // Output peak for ghost comparison
-        float gainDb = 0.0f;        // Gain adjustment in dB
+        float inputMin = 0.0f;      // Min input level in block (0-1)
+        float inputMax = 0.0f;      // Max input level in block (0-1)
+        float outputMin = 0.0f;     // Min output level in block
+        float outputMax = 0.0f;     // Max output level in block
+        float gainDb = 0.0f;        // Average gain adjustment in dB
     };
 
     // Coordinate conversions (logarithmic scale)
-    float linearToLogY(float linear) const;  // 0-1 linear to Y with log scale
+    float linearToLogY(float linear, float areaHeight) const;
     float dbToY(float db) const;
     float yToDb(float y) const;
     float gainDbToY(float gainDb) const;
+    float gainDbToImageY(float gainDb, float imageHeight) const;
     
     // Hit testing for draggable handles
     enum class DragTarget { None, TargetHandle, BoostRangeHandle, CutRangeHandle };
     DragTarget hitTestHandle(const juce::Point<float>& pos) const;
     
-    // Drawing helpers
+    // Drawing helpers (static elements drawn each frame)
     void drawBackground(juce::Graphics& g);
     void drawGridLines(juce::Graphics& g);
-    void drawWaveform(juce::Graphics& g);
-    void drawGhostWaveform(juce::Graphics& g);  // Boost zones (drawn behind input)
-    void drawCutOverlay(juce::Graphics& g);      // Cut overlay (drawn in front of input)
-    void drawGainCurve(juce::Graphics& g);
     void drawTargetAndRangeLines(juce::Graphics& g);
     void drawHandles(juce::Graphics& g);
     void drawIOMeters(juce::Graphics& g);
     void drawClippingIndicator(juce::Graphics& g);
+    void drawPhraseIndicator(juce::Graphics& g);
+    
+    // Image-based waveform rendering
+    void initializeWaveformImage();
+    void shiftWaveformImage(int pixels);
+    void storeColumnData(int x, const SampleData& data);  // Store position data only
+    void drawWaveformPaths(juce::Graphics& g);  // Draw closed path waveforms (fill + stroke)
+    void drawGainCurvePath(juce::Graphics& g);  // Draw smooth gain curve as path
 
     //==============================================================================
-    // Display buffer (ring buffer)
-    std::vector<SampleData> displayBuffer;
-    std::atomic<int> writeIndex { 0 };
-    int displayWidth = 500;
+    // Offscreen waveform image (scrolls continuously)
+    juce::Image waveformImage;
+    int imageWidth = 0;
+    int imageHeight = 0;
+    
+    // Gain curve data buffer (for smooth path drawing)
+    std::vector<float> gainCurveBuffer;  // Ring buffer of gain values
+    int gainCurveWriteIndex = 0;
+    
+    // Waveform position buffers (for closed path rendering)
+    std::vector<float> inputTopBuffer;    // Y positions of input max (top edge)
+    std::vector<float> inputBottomBuffer; // Y positions of input min (bottom edge)
+    std::vector<float> outputTopBuffer;   // Y positions of output max (for boost/cut)
+    std::vector<float> outputBottomBuffer;// Y positions of output min
+    
+    // Time-based scrolling
+    double scrollAccumulator = 0.0;  // Accumulates fractional pixels
+    double lastFrameTime = 0.0;
+    
+    // Pending sample data (queue for new columns)
+    std::vector<SampleData> pendingData;
+    int pendingDataIndex = 0;
+    juce::SpinLock pendingLock;
     
     // Areas
     juce::Rectangle<float> waveformArea;
-    static constexpr int handleAreaWidth = 0;   // No left panel, but target/range lines are still draggable
-    static constexpr int ioMeterWidth = 32;     // Compact meter area for narrower meters
+    static constexpr int handleAreaWidth = 0;
+    static constexpr int ioMeterWidth = 44;  // Wider for better readout display
     
-    // Waveform scroll speed (1.0 = normal, 0.5 = half speed, 2.0 = double speed)
-    float scrollSpeed = 0.5f;  // Default to slower scrolling
+    // Scroll timing - fixed pixels per second (independent of display size)
+    static constexpr float pixelsPerSecondFixed = 150.0f;  // Constant scroll rate
     
-    // Downsampling - lower value = higher resolution/fidelity
-    float samplesPerPixel = 64.0f;
+    // Data capture - samples per buffer entry (smaller = more resolution)
+    static constexpr int samplesPerEntry = 256;  // Block size for visual sampling
     int sampleCounter = 0;
-    float currentInputMax = 0.0f;
+    float currentInputMin = 1.0f;   // Track min (start high)
+    float currentInputMax = 0.0f;   // Track max (start low)
+    float currentOutputMin = 1.0f;
     float currentOutputMax = 0.0f;
     float currentGainSum = 0.0f;
     int gainSampleCount = 0;
+    
+    // For waveform interpolation
+    SampleData lastDrawnData;
+    bool hasLastDrawnData = false;
 
     // Parameters (separate boost and cut)
     std::atomic<float> targetLevelDb { -18.0f };
@@ -153,18 +187,22 @@ private:
     float outputPeakHoldDb = -100.0f;
     int inputPeakHoldCounter = 0;
     int outputPeakHoldCounter = 0;
-    static constexpr int peakHoldFrames = 60;  // ~1 second at 60fps
+    static constexpr int peakHoldFrames = 60;
+    
+    // Natural mode phrase indicator
+    bool naturalModeActive = false;
+    bool phraseActive = false;
     
     // RMS average for output meter
     float outputRmsDb = -100.0f;
-    float outputDisplayDb = -100.0f;  // Smoothed display value
+    float outputDisplayDb = -100.0f;
     float rmsAccumulator = 0.0f;
     int rmsSampleCount = 0;
     
-    // Clip indicator hold (stays longer)
+    // Clip indicator hold
     bool clipIndicatorActive = false;
     int clipHoldCounter = 0;
-    static constexpr int clipHoldFrames = 180;  // ~3 seconds at 60fps
+    static constexpr int clipHoldFrames = 180;
     
     // Current gain for gain meter
     std::atomic<float> currentGainDb { 0.0f };
@@ -186,7 +224,7 @@ private:
     float gainMaxTrack = -100.0f;
     int statsSampleCount = 0;
     
-    // Gain curve visibility (fades in when audio plays)
+    // Gain curve visibility
     float gainCurveOpacity = 0.0f;
     bool hasActiveAudio = false;
     int silenceSampleCount = 0;
@@ -197,8 +235,6 @@ private:
 
     // Visual settings
     static constexpr float handleHitDistance = 12.0f;
-
-    juce::SpinLock bufferLock;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(WaveformDisplay)
 };

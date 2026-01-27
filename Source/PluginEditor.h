@@ -290,8 +290,8 @@ private:
     {
         if (std::abs(currentOpacity - targetOpacity) > 0.01f)
         {
-            // Slower fade: 0.08 for fade-out, 0.12 for fade-in
-            float speed = (targetOpacity > currentOpacity) ? 0.12f : 0.06f;
+            // Faster fade: 0.25 for fade-in, 0.20 for fade-out
+            float speed = (targetOpacity > currentOpacity) ? 0.25f : 0.20f;
             currentOpacity += (targetOpacity - currentOpacity) * speed;
             if (onAnimationUpdate)
                 onAnimationUpdate();
@@ -424,14 +424,14 @@ public:
         float arcStart = juce::MathConstants<float>::pi * 1.25f;    // 5π/4 = 225° = 7:30
         float arcEnd = juce::MathConstants<float>::pi * 2.75f;      // 11π/4 = 495° = 4:30 (going clockwise)
         
-        // Draw background arc (dim track)
+        // Draw background arc (dim track) - use butt caps for clean straight edges
         juce::Path bgArc;
         bgArc.addArc(arcBounds.getX(), arcBounds.getY(), 
                      arcBounds.getWidth(), arcBounds.getHeight(),
                      arcStart, arcEnd, true);
         g.setColour(CustomLookAndFeel::getSurfaceColour().darker(0.15f));
         g.strokePath(bgArc, juce::PathStrokeType(arcThickness, juce::PathStrokeType::curved,
-                                                  juce::PathStrokeType::rounded));
+                                                  juce::PathStrokeType::butt));
         
         // Draw semi-transparent circle inside the arc for better readability
         float innerCircleRadius = arcRadius - arcThickness - 3.0f;
@@ -479,10 +479,10 @@ public:
                                fillAngle, 0.0f, true);
             }
             
-            // Main arc fill
+            // Main arc fill - use butt cap at the 0 dB end for clean straight cutoff
             g.setColour(displayColour.withAlpha(0.95f));
             g.strokePath(fillArc, juce::PathStrokeType(arcThickness, juce::PathStrokeType::curved,
-                                                        juce::PathStrokeType::rounded));
+                                                        juce::PathStrokeType::butt));
         }
         
         // === NUMBER DISPLAY (inside the dark circle) ===
@@ -650,33 +650,18 @@ public:
     {
         juce::PopupMenu menu;
         menu.setLookAndFeel(&getLookAndFeel());
-        menu.addSectionHeader("Size");
         menu.addItem(1, "Small", true, currentSize == 0);
         menu.addItem(2, "Medium", true, currentSize == 1);
         menu.addItem(3, "Large", true, currentSize == 2);
         
-        menu.addSeparator();
-        menu.addSectionHeader("Scale");
-        menu.addItem(10, "100%", true, currentScale == 100);
-        menu.addItem(11, "125%", true, currentScale == 125);
-        menu.addItem(12, "150%", true, currentScale == 150);
-        menu.addItem(13, "175%", true, currentScale == 175);
-        menu.addItem(14, "200%", true, currentScale == 200);
-        
         menu.showMenuAsync(juce::PopupMenu::Options()
             .withTargetComponent(this)
-            .withMinimumWidth(100),
+            .withMinimumWidth(80),
             [this](int result) {
                 if (result >= 1 && result <= 3 && onSizeSelected)
                 {
                     currentSize = result - 1;
                     onSizeSelected(result - 1);
-                }
-                else if (result >= 10 && result <= 14 && onScaleSelected)
-                {
-                    int scales[] = { 100, 125, 150, 175, 200 };
-                    currentScale = scales[result - 10];
-                    onScaleSelected(currentScale);
                 }
             });
     }
@@ -827,6 +812,181 @@ private:
     
     bool isLearning = false;
     float pulsePhase = 0.0f;
+};
+
+//==============================================================================
+// Custom About/Help Dialog with fade animation matching plugin style
+class AboutDialogPanel : public juce::Component, private juce::Timer
+{
+public:
+    AboutDialogPanel()
+    {
+        setOpaque(false);
+        setInterceptsMouseClicks(false, true);  // Allow child button clicks
+        
+        // Add actual close button (more reliable than mouseDown in AU hosts)
+        closeButton.setButtonText(juce::CharPointer_UTF8("\xc3\x97"));  // × symbol
+        closeButton.onClick = [this] {
+            hide();
+            setVisible(false);
+            if (onClose) onClose();
+        };
+        closeButton.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
+        closeButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFFA0A8B0));
+        addAndMakeVisible(closeButton);
+        closeButton.setVisible(false);
+    }
+    
+    ~AboutDialogPanel() override
+    {
+        stopTimer();  // Critical: stop timer before destruction
+    }
+    
+    void setVersion(const juce::String& version)
+    {
+        versionText = "magic.RIDE v" + version;
+    }
+    
+    void show()
+    {
+        targetOpacity = 0.98f;
+        setVisible(true);
+        closeButton.setVisible(true);
+        toFront(true);
+        if (!isTimerRunning())
+            startTimerHz(60);
+        resized();  // Position the close button
+    }
+    
+    void hide()
+    {
+        targetOpacity = 0.0f;
+        closeButton.setVisible(false);
+    }
+    
+    bool isShowing() const { return targetOpacity > 0.5f || currentOpacity > 0.01f; }
+    bool isAnimating() const { return std::abs(currentOpacity - targetOpacity) > 0.01f; }
+    
+    void resized() override
+    {
+        auto fullBounds = getLocalBounds().toFloat();
+        float dialogWidth = 280.0f;
+        float dialogHeight = 200.0f;
+        dialogBounds = juce::Rectangle<float>(
+            (fullBounds.getWidth() - dialogWidth) / 2.0f,
+            (fullBounds.getHeight() - dialogHeight) / 2.0f,
+            dialogWidth, dialogHeight
+        );
+        
+        // Position close button
+        int closeSize = 24;
+        closeButton.setBounds(
+            static_cast<int>(dialogBounds.getRight()) - closeSize - 6,
+            static_cast<int>(dialogBounds.getY()) + 6,
+            closeSize, closeSize
+        );
+    }
+    
+    void paint(juce::Graphics& g) override
+    {
+        if (currentOpacity < 0.01f) return;
+        
+        auto fullBounds = getLocalBounds().toFloat();
+        
+        // Semi-transparent overlay behind the dialog
+        g.setColour(juce::Colours::black.withAlpha(0.4f * currentOpacity));
+        g.fillRect(fullBounds);
+        
+        // Shadow
+        g.setColour(juce::Colours::black.withAlpha(0.5f * currentOpacity));
+        g.fillRoundedRectangle(dialogBounds.translated(0.0f, 6.0f), 12.0f);
+        
+        // Background with gradient (matches advanced panel)
+        juce::ColourGradient bgGradient(
+            juce::Colour(0xFF282C34).withAlpha(0.98f * currentOpacity), dialogBounds.getX(), dialogBounds.getY(),
+            juce::Colour(0xFF1A1D22).withAlpha(0.98f * currentOpacity), dialogBounds.getX(), dialogBounds.getBottom(),
+            false
+        );
+        g.setGradientFill(bgGradient);
+        g.fillRoundedRectangle(dialogBounds, 12.0f);
+        
+        // Border
+        g.setColour(CustomLookAndFeel::getBorderColour().withAlpha(0.6f * currentOpacity));
+        g.drawRoundedRectangle(dialogBounds, 12.0f, 1.0f);
+        
+        // Top accent line
+        g.setColour(CustomLookAndFeel::getAccentColour().withAlpha(0.5f * currentOpacity));
+        g.fillRoundedRectangle(dialogBounds.getX() + 30, dialogBounds.getY() + 4, dialogBounds.getWidth() - 80, 2.0f, 1.0f);
+        
+        float y = dialogBounds.getY() + 26.0f;
+        
+        // Title/Version
+        g.setColour(CustomLookAndFeel::getTextColour().withAlpha(currentOpacity));
+        g.setFont(CustomLookAndFeel::getPluginFont(16.0f, true));
+        g.drawText(versionText, dialogBounds.withY(y).withHeight(24.0f), juce::Justification::centredTop);
+        y += 30.0f;
+        
+        // Subtitle
+        g.setColour(CustomLookAndFeel::getAccentColour().withAlpha(currentOpacity));
+        g.setFont(CustomLookAndFeel::getPluginFont(11.0f, false));
+        g.drawText("Precision Vocal Leveling", dialogBounds.withY(y).withHeight(18.0f), juce::Justification::centredTop);
+        y += 28.0f;
+        
+        // Author info
+        g.setColour(CustomLookAndFeel::getDimTextColour().withAlpha(currentOpacity));
+        g.setFont(CustomLookAndFeel::getPluginFont(10.0f, false));
+        g.drawText("by MBM Audio", dialogBounds.withY(y).withHeight(16.0f), juce::Justification::centredTop);
+        y += 16.0f;
+        g.setColour(CustomLookAndFeel::getAccentColour().withAlpha(0.8f * currentOpacity));
+        g.drawText("musicbymattie.com", dialogBounds.withY(y).withHeight(16.0f), juce::Justification::centredTop);
+        y += 32.0f;
+        
+        // Help hint
+        g.setColour(CustomLookAndFeel::getDimTextColour().withAlpha(0.7f * currentOpacity));
+        g.setFont(CustomLookAndFeel::getPluginFont(9.0f, false));
+        g.drawText("Hover over any control for 3 seconds", dialogBounds.withY(y).withHeight(14.0f), juce::Justification::centredTop);
+        y += 13.0f;
+        g.drawText("to see help information.", dialogBounds.withY(y).withHeight(14.0f), juce::Justification::centredTop);
+        
+        // Bottom accent line
+        g.setColour(CustomLookAndFeel::getAccentColour().withAlpha(0.35f * currentOpacity));
+        g.fillRoundedRectangle(dialogBounds.getX() + 40.0f, dialogBounds.getBottom() - 5.0f,
+                               dialogBounds.getWidth() - 80.0f, 2.0f, 1.0f);
+    }
+    
+    std::function<void()> onClose;
+    
+private:
+    juce::TextButton closeButton;
+    juce::Rectangle<float> dialogBounds;
+    
+    void timerCallback() override
+    {
+        if (std::abs(currentOpacity - targetOpacity) > 0.01f)
+        {
+            float speed = (targetOpacity > currentOpacity) ? 0.25f : 0.20f;
+            currentOpacity += (targetOpacity - currentOpacity) * speed;
+            closeButton.setAlpha(currentOpacity);
+            repaint();
+        }
+        else if (currentOpacity < 0.01f && targetOpacity < 0.01f)
+        {
+            setVisible(false);
+            closeButton.setVisible(false);
+            stopTimer();  // Stop timer when fully hidden
+        }
+        else if (std::abs(currentOpacity - targetOpacity) <= 0.01f && targetOpacity > 0.5f)
+        {
+            // Animation complete at full opacity - can stop timer
+            currentOpacity = targetOpacity;
+            stopTimer();
+            repaint();
+        }
+    }
+    
+    juce::String versionText;
+    float targetOpacity = 0.0f;
+    float currentOpacity = 0.0f;
 };
 
 //==============================================================================
@@ -1462,6 +1622,88 @@ private:
 };
 
 //==============================================================================
+// Speed icon component - displays turtle (slow) or rabbit (fast) icons
+class SpeedIcon : public juce::Component
+{
+public:
+    enum IconType { Turtle, Rabbit };
+    
+    SpeedIcon(IconType type) : iconType(type)
+    {
+        setInterceptsMouseClicks(false, false);
+    }
+    
+    void paint(juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat().reduced(1.0f);
+        float size = juce::jmin(bounds.getWidth(), bounds.getHeight());
+        
+        g.setColour(CustomLookAndFeel::getDimTextColour().withAlpha(0.45f));
+        
+        if (iconType == Turtle)
+        {
+            drawTurtle(g, bounds.getCentreX(), bounds.getCentreY(), size * 0.45f);
+        }
+        else
+        {
+            drawRabbit(g, bounds.getCentreX(), bounds.getCentreY(), size * 0.45f);
+        }
+    }
+    
+private:
+    IconType iconType;
+    
+    void drawTurtle(juce::Graphics& g, float cx, float cy, float scale)
+    {
+        // Turtle - solid filled shapes
+        juce::Path turtle;
+        
+        // Shell (oval)
+        turtle.addEllipse(cx - scale * 0.8f, cy - scale * 0.4f, scale * 1.6f, scale * 1.0f);
+        
+        // Head
+        turtle.addEllipse(cx + scale * 0.7f, cy - scale * 0.25f, scale * 0.5f, scale * 0.45f);
+        
+        // Front leg
+        turtle.addEllipse(cx + scale * 0.3f, cy + scale * 0.35f, scale * 0.28f, scale * 0.35f);
+        
+        // Back leg  
+        turtle.addEllipse(cx - scale * 0.5f, cy + scale * 0.35f, scale * 0.28f, scale * 0.35f);
+        
+        // Tail
+        turtle.addEllipse(cx - scale * 0.95f, cy - scale * 0.1f, scale * 0.25f, scale * 0.18f);
+        
+        g.fillPath(turtle);
+    }
+    
+    void drawRabbit(juce::Graphics& g, float cx, float cy, float scale)
+    {
+        // Rabbit - solid filled shapes
+        juce::Path rabbit;
+        
+        // Body
+        rabbit.addEllipse(cx - scale * 0.5f, cy - scale * 0.2f, scale * 1.2f, scale * 0.9f);
+        
+        // Head
+        rabbit.addEllipse(cx + scale * 0.4f, cy - scale * 0.5f, scale * 0.6f, scale * 0.55f);
+        
+        // Left ear (tall)
+        rabbit.addEllipse(cx + scale * 0.35f, cy - scale * 1.3f, scale * 0.2f, scale * 0.7f);
+        
+        // Right ear (tall)
+        rabbit.addEllipse(cx + scale * 0.6f, cy - scale * 1.2f, scale * 0.2f, scale * 0.65f);
+        
+        // Tail (fluffy circle)
+        rabbit.addEllipse(cx - scale * 0.7f, cy - scale * 0.1f, scale * 0.35f, scale * 0.35f);
+        
+        // Back leg
+        rabbit.addEllipse(cx - scale * 0.2f, cy + scale * 0.3f, scale * 0.45f, scale * 0.35f);
+        
+        g.fillPath(rabbit);
+    }
+};
+
+//==============================================================================
 class VocalRiderAudioProcessorEditor : public juce::AudioProcessorEditor,
                                         public juce::Timer
 {
@@ -1539,6 +1781,10 @@ private:
     juce::Label rangeLabel;
     juce::Label speedLabel;
     
+    // Speed icons (turtle = slow, rabbit = fast)
+    SpeedIcon turtleIcon { SpeedIcon::Turtle };
+    SpeedIcon rabbitIcon { SpeedIcon::Rabbit };
+    
     // Mini gain meter
     MiniGainMeter miniGainMeter;
     juce::Label gainMeterLabel;
@@ -1551,6 +1797,7 @@ private:
     
     // Help button (visual indicator - no longer toggle-based)
     HelpButton helpButton;
+    AboutDialogPanel aboutDialog;
     
     // Hover-based help tooltip tracking (shows help after 3 seconds of hovering)
     juce::Component* currentHoveredComponent = nullptr;
@@ -1595,10 +1842,23 @@ private:
     float learnSumDb = 0.0f;
     int learnSampleCount = 0;
     
+    // Displayed gain (decays to zero when no audio)
+    float displayedGainDb = 0.0f;
+    
     // Parameter attachments
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> targetAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> rangeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> speedAttachment;
+    
+    // Advanced parameter attachments
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attackAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> releaseAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> holdAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> breathReductionAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> transientPreservationAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> naturalModeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> smartSilenceAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputTrimAttachment;
 
     //==============================================================================
     // Advanced panel (slide-down from top)
@@ -1614,6 +1874,7 @@ private:
     TooltipSlider holdSlider;
     TooltipSlider breathReductionSlider;
     TooltipSlider transientPreservationSlider;
+    
     // Output Trim - adjustable MiniGainMeter-style fader
     class AdjustableGainMeter : public juce::Component
     {

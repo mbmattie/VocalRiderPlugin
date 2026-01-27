@@ -1,0 +1,127 @@
+name: Build magic.RIDE
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  PLUGIN_NAME: magic.RIDE
+  VERSION: 1.0.0
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: latest-stable
+    
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+    
+    - name: Build
+      run: cmake --build build --config Release -j$(sysctl -n hw.ncpu)
+    
+    - name: Create installer
+      run: |
+        cd installer
+        chmod +x build_installer.sh
+        ./build_installer.sh
+    
+    - name: Upload macOS Installer
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-macOS-Installer
+        path: installer/output/*.pkg
+    
+    - name: Upload macOS AU
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-macOS-AU
+        path: build/VocalRider_artefacts/Release/AU/*.component
+    
+    - name: Upload macOS VST3
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-macOS-VST3
+        path: build/VocalRider_artefacts/Release/VST3/*.vst3
+
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+    
+    - name: Build
+      run: cmake --build build --config Release --parallel
+    
+    - name: Build Windows Installer
+      run: |
+        & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\windows\magic.RIDE.iss
+      shell: pwsh
+    
+    - name: Upload Windows Installer
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-Windows-Installer
+        path: installer/output/*-Windows-Setup.exe
+    
+    - name: Upload Windows VST3
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-Windows-VST3
+        path: build/VocalRider_artefacts/Release/VST3/*.vst3
+    
+    - name: Upload Windows Standalone
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-Windows-Standalone
+        path: build/VocalRider_artefacts/Release/Standalone/*.exe
+
+  # Create a release with all artifacts when a tag is pushed
+  release:
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+    
+    - name: Display artifacts
+      run: ls -R artifacts
+    
+    - name: Create ZIP archives
+      run: |
+        cd artifacts
+        for dir in */; do
+          zip -r "${dir%/}.zip" "$dir"
+        done
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: artifacts/*.zip
+        draft: true
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

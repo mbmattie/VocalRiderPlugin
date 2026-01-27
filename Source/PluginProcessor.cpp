@@ -18,6 +18,16 @@ const juce::String VocalRiderAudioProcessor::speedParamId = "speed";
 const juce::String VocalRiderAudioProcessor::rangeParamId = "range";
 const juce::String VocalRiderAudioProcessor::gainOutputParamId = "gainOutput";
 
+// Advanced parameter IDs
+const juce::String VocalRiderAudioProcessor::attackParamId = "attack";
+const juce::String VocalRiderAudioProcessor::releaseParamId = "release";
+const juce::String VocalRiderAudioProcessor::holdParamId = "hold";
+const juce::String VocalRiderAudioProcessor::breathReductionParamId = "breathReduction";
+const juce::String VocalRiderAudioProcessor::transientPreservationParamId = "transientPreservation";
+const juce::String VocalRiderAudioProcessor::naturalModeParamId = "naturalMode";
+const juce::String VocalRiderAudioProcessor::smartSilenceParamId = "smartSilence";
+const juce::String VocalRiderAudioProcessor::outputTrimParamId = "outputTrim";
+
 //==============================================================================
 // Factory Presets
 const std::vector<VocalRiderAudioProcessor::Preset>& VocalRiderAudioProcessor::getFactoryPresets()
@@ -68,6 +78,16 @@ VocalRiderAudioProcessor::VocalRiderAudioProcessor()
     speedParam = apvts.getRawParameterValue(speedParamId);
     rangeParam = apvts.getRawParameterValue(rangeParamId);
     gainOutputParamPtr = apvts.getRawParameterValue(gainOutputParamId);
+    
+    // Advanced parameter pointers
+    attackParam = apvts.getRawParameterValue(attackParamId);
+    releaseParam = apvts.getRawParameterValue(releaseParamId);
+    holdParam = apvts.getRawParameterValue(holdParamId);
+    breathReductionParam = apvts.getRawParameterValue(breathReductionParamId);
+    transientPreservationParam = apvts.getRawParameterValue(transientPreservationParamId);
+    naturalModeParam = apvts.getRawParameterValue(naturalModeParamId);
+    smartSilenceParam = apvts.getRawParameterValue(smartSilenceParamId);
+    outputTrimParam = apvts.getRawParameterValue(outputTrimParamId);
 
     #if JucePlugin_Build_Standalone
     formatManager.registerBasicFormats();
@@ -104,12 +124,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout VocalRiderAudioProcessor::cr
         juce::AudioParameterFloatAttributes().withLabel("%")
     ));
 
-    // Range: 0-12 dB, default 12 dB
+    // Range: 0-12 dB, default 6 dB
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID(rangeParamId, 1),
         "Range",
         juce::NormalisableRange<float>(0.0f, 12.0f, 0.1f),
-        12.0f,
+        6.0f,
         juce::AudioParameterFloatAttributes().withLabel("dB")
     ));
 
@@ -120,6 +140,77 @@ juce::AudioProcessorValueTreeState::ParameterLayout VocalRiderAudioProcessor::cr
         juce::NormalisableRange<float>(-12.0f, 12.0f, 0.01f),
         0.0f,
         juce::AudioParameterFloatAttributes().withLabel("dB").withAutomatable(true)
+    ));
+
+    //==============================================================================
+    // Advanced Parameters
+    
+    // Attack: 1ms to 500ms, default 50ms
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID(attackParamId, 1),
+        "Attack",
+        juce::NormalisableRange<float>(1.0f, 500.0f, 0.1f, 0.4f),  // Skewed for finer control at lower values
+        50.0f,
+        juce::AudioParameterFloatAttributes().withLabel("ms")
+    ));
+
+    // Release: 10ms to 2000ms, default 200ms
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID(releaseParamId, 1),
+        "Release",
+        juce::NormalisableRange<float>(10.0f, 2000.0f, 0.1f, 0.4f),  // Skewed
+        200.0f,
+        juce::AudioParameterFloatAttributes().withLabel("ms")
+    ));
+
+    // Hold: 0ms to 500ms, default 50ms
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID(holdParamId, 1),
+        "Hold",
+        juce::NormalisableRange<float>(0.0f, 500.0f, 0.1f),
+        50.0f,
+        juce::AudioParameterFloatAttributes().withLabel("ms")
+    ));
+
+    // Breath Reduction: 0 to 12 dB, default 0 (off)
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID(breathReductionParamId, 1),
+        "Breath Reduction",
+        juce::NormalisableRange<float>(0.0f, 12.0f, 0.1f),
+        0.0f,
+        juce::AudioParameterFloatAttributes().withLabel("dB")
+    ));
+
+    // Transient Preservation: 0 to 100%, default 50%
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID(transientPreservationParamId, 1),
+        "Transient Preservation",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f),
+        50.0f,
+        juce::AudioParameterFloatAttributes().withLabel("%")
+    ));
+
+    // Natural Mode: On/Off, default On
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID(naturalModeParamId, 1),
+        "Natural Mode",
+        true  // default on
+    ));
+
+    // Smart Silence: On/Off, default Off
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID(smartSilenceParamId, 1),
+        "Smart Silence",
+        false  // default off
+    ));
+
+    // Output Trim: -12 to +12 dB, default 0
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID(outputTrimParamId, 1),
+        "Output Trim",
+        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f),
+        0.0f,
+        juce::AudioParameterFloatAttributes().withLabel("dB")
     ));
 
     return { params.begin(), params.end() };
@@ -196,6 +287,26 @@ void VocalRiderAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBl
     lufsHighShelf.setResonance(0.707f);
     
     lufsIntegrator = 0.0f;
+    
+    // Vocal focus filters (frequency-weighted detection for better vocal tracking)
+    vocalFocusHighPass.prepare(spec);
+    vocalFocusHighPass.setType(juce::dsp::StateVariableTPTFilterType::highpass);
+    vocalFocusHighPass.setCutoffFrequency(180.0f);  // Cut low rumble below vocal range
+    vocalFocusHighPass.setResonance(0.707f);
+    
+    vocalFocusLowPass.prepare(spec);
+    vocalFocusLowPass.setType(juce::dsp::StateVariableTPTFilterType::lowpass);
+    vocalFocusLowPass.setCutoffFrequency(5000.0f);  // Cut high frequencies above vocal presence
+    vocalFocusLowPass.setResonance(0.707f);
+    
+    vocalFocusBandBoost.prepare(spec);
+    vocalFocusBandBoost.setType(juce::dsp::StateVariableTPTFilterType::bandpass);
+    vocalFocusBandBoost.setCutoffFrequency(2500.0f);  // Boost vocal presence region
+    vocalFocusBandBoost.setResonance(1.0f);  // Moderate Q for presence boost
+    
+    // Sidechain RMS detector
+    sidechainRmsDetector.prepare(sampleRate);
+    sidechainRmsDetector.setWindowSize(0.05f);  // 50ms window for sidechain
     lufsSampleCount = 0;
     
     // Breath detection state
@@ -226,6 +337,9 @@ void VocalRiderAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBl
     phraseAccumulator = 0.0f;
     phraseSampleCount = 0;
     currentPhraseGainDb = 0.0f;
+    phraseLastLevelDb = -100.0f;
+    phraseStartSample = 0;
+    phraseEndSample = 0;
     lastPhraseGainDb = 0.0f;
     silenceSampleCount = 0;
     phraseGainSmoother = 0.0f;
@@ -265,6 +379,13 @@ bool VocalRiderAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts
         return false;
 
     if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
+        return false;
+
+    // Sidechain can be mono, stereo, or disabled
+    auto sidechainSet = layouts.getChannelSet(true, 1);
+    if (!sidechainSet.isDisabled() 
+        && sidechainSet != juce::AudioChannelSet::mono()
+        && sidechainSet != juce::AudioChannelSet::stereo())
         return false;
 
     return true;
@@ -328,6 +449,16 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         lastSpeed = speed;
     }
 
+    // Sync advanced parameters from automation
+    if (attackParam != nullptr) attackMs.store(attackParam->load());
+    if (releaseParam != nullptr) releaseMs.store(releaseParam->load());
+    if (holdParam != nullptr) holdMs.store(holdParam->load());
+    if (breathReductionParam != nullptr) breathReductionDb.store(breathReductionParam->load());
+    if (transientPreservationParam != nullptr) transientPreservation.store(transientPreservationParam->load() / 100.0f);
+    if (naturalModeParam != nullptr) naturalModeEnabled.store(naturalModeParam->load() > 0.5f);
+    if (smartSilenceParam != nullptr) smartSilenceEnabled.store(smartSilenceParam->load() > 0.5f);
+    if (outputTrimParam != nullptr) outputTrimDb.store(outputTrimParam->load());
+
     // Apply advanced attack/release/hold
     gainSmoother.setAttackTime(attackMs.load());
     gainSmoother.setReleaseTime(releaseMs.load());
@@ -354,15 +485,53 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     float inputDb = juce::Decibels::gainToDecibels(inputRms, -100.0f);
     inputLevelDb.store(inputDb);
 
-    // === SPECTRAL FOCUS (200Hz - 4kHz vocal range) ===
+    // === SIDECHAIN INPUT PROCESSING ===
+    bool useSidechain = sidechainEnabled.load() && hasSidechainInput();
+    float sidechainBlend = sidechainAmount.load() / 100.0f;
+    float sidechainLevel = -100.0f;
+    
+    if (useSidechain)
+    {
+        // Get sidechain input (channels 2+ are sidechain)
+        juce::AudioBuffer<float> sidechainBuffer(1, numSamples);
+        sidechainBuffer.clear();
+        
+        int numSidechainChannels = getTotalNumInputChannels() - 2;
+        for (int ch = 0; ch < numSidechainChannels && ch < 2; ++ch)
+        {
+            sidechainBuffer.addFrom(0, 0, buffer, ch + 2, 0, numSamples, 
+                                    1.0f / static_cast<float>(juce::jmin(numSidechainChannels, 2)));
+        }
+        
+        // Measure sidechain level
+        float scRms = sidechainBuffer.getRMSLevel(0, 0, numSamples);
+        sidechainLevel = juce::Decibels::gainToDecibels(scRms, -100.0f);
+        sidechainLevelDb.store(sidechainLevel);
+    }
+
+    // === VOCAL FOCUS FILTER (frequency-weighted detection) ===
     // Create filtered copy for detection (isolates vocal fundamentals)
     juce::AudioBuffer<float> filteredBuffer(1, numSamples);
     filteredBuffer.copyFrom(0, 0, monoBuffer, 0, 0, numSamples);
     
-    juce::dsp::AudioBlock<float> filteredBlock(filteredBuffer);
-    juce::dsp::ProcessContextReplacing<float> filterContext(filteredBlock);
-    sidechainHPF.process(filterContext);  // High-pass at 200Hz
-    sidechainLPF.process(filterContext);  // Low-pass at 4kHz
+    bool useVocalFocus = vocalFocusEnabled.load();
+    
+    if (useVocalFocus)
+    {
+        // Apply vocal focus filters to detection signal
+        juce::dsp::AudioBlock<float> filteredBlock(filteredBuffer);
+        juce::dsp::ProcessContextReplacing<float> filterContext(filteredBlock);
+        vocalFocusHighPass.process(filterContext);  // Cut below 180Hz
+        vocalFocusLowPass.process(filterContext);   // Cut above 5kHz
+    }
+    else
+    {
+        // Use original spectral focus filters (legacy behavior)
+        juce::dsp::AudioBlock<float> filteredBlock(filteredBuffer);
+        juce::dsp::ProcessContextReplacing<float> filterContext(filteredBlock);
+        sidechainHPF.process(filterContext);  // High-pass at 200Hz
+        sidechainLPF.process(filterContext);  // Low-pass at 4kHz
+    }
     
     const float* filteredRead = filteredBuffer.getReadPointer(0);
     
@@ -457,6 +626,17 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const float gateSmoothAttack = 0.99f;
     const float gateSmoothRelease = 0.9995f;
     
+    // === SIDECHAIN TARGET ADJUSTMENT ===
+    // When sidechain is enabled, blend the fixed target with matching the sidechain level
+    float effectiveTarget = targetLevel;
+    if (useSidechain && sidechainLevel > -60.0f)
+    {
+        // Sidechain level becomes the dynamic target
+        // Blend between fixed target (0%) and sidechain-following (100%)
+        effectiveTarget = targetLevel * (1.0f - sidechainBlend) + sidechainLevel * sidechainBlend;
+    }
+    targetLevel = effectiveTarget;
+    
     // Check if Natural (phrase-based) mode is enabled
     bool useNaturalMode = naturalModeEnabled.load();
     
@@ -482,23 +662,51 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         if (useNaturalMode)
         {
             // === PHRASE-BASED (NATURAL) MODE ===
-            // Detect phrases based on silence gaps and apply consistent gain per phrase
+            // Detect phrases using intelligent boundary detection and apply consistent gain per phrase
+            // Now integrates with advanced features: breath detection, transient preservation
             
             float sampleValue = filteredRead[sample];
             float sampleLevelDb = juce::Decibels::gainToDecibels(std::abs(sampleValue), -100.0f);
             
-            if (sampleLevelDb > gateThresholdDb)
+            // === INTELLIGENT PHRASE BOUNDARY DETECTION ===
+            // Use multiple signals: level, spectral characteristics, energy changes
+            bool audioPresent = sampleLevelDb > gateThresholdDb;
+            
+            // Track energy changes for phrase detection
+            float energyDelta = std::abs(sampleLevelDb - phraseLastLevelDb);
+            phraseLastLevelDb = sampleLevelDb;
+            
+            // Large energy jump can indicate new phrase even without full silence
+            bool energyJump = (energyDelta > 12.0f && sampleLevelDb > gateThresholdDb + 6.0f);
+            
+            if (audioPresent)
             {
                 // Audio present
                 silenceSampleCount = 0;
                 
-                if (!inPhrase)
+                // Start new phrase on: first audio after silence, OR significant energy jump
+                if (!inPhrase || (energyJump && phraseSampleCount > phraseMinSamples))
                 {
-                    // Start new phrase
-                    inPhrase = true;
-                    phraseAccumulator = 0.0f;
-                    phraseSampleCount = 0;
-                    lastPhraseGainDb = currentPhraseGainDb;
+                    if (!inPhrase || energyJump)
+                    {
+                        // Start new phrase
+                        bool wasInPhrase = inPhrase;
+                        inPhrase = true;
+                        phraseStartSample = sample;
+                        
+                        if (!wasInPhrase)
+                        {
+                            phraseAccumulator = 0.0f;
+                            phraseSampleCount = 0;
+                            lastPhraseGainDb = currentPhraseGainDb;
+                        }
+                        else if (energyJump)
+                        {
+                            // Soft reset for energy-based phrase change
+                            phraseAccumulator *= 0.3f;  // Keep some history
+                            phraseSampleCount = static_cast<int>(phraseSampleCount * 0.3f);
+                        }
+                    }
                 }
                 
                 // Accumulate for phrase level calculation
@@ -510,25 +718,71 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 {
                     float phraseRms = std::sqrt(phraseAccumulator / static_cast<float>(phraseSampleCount));
                     float phraseLevelDb = juce::Decibels::gainToDecibels(phraseRms, -100.0f);
-                    currentPhraseGainDb = juce::jlimit(-range, range, targetLevel - phraseLevelDb);
+                    float gainNeeded = targetLevel - phraseLevelDb;
+                    
+                    // === BREATH REDUCTION (integrated) ===
+                    if (doBreathDetection && isBreath)
+                    {
+                        gainNeeded = juce::jmin(gainNeeded, -breathReduce);
+                    }
+                    
+                    // === TRANSIENT PRESERVATION (integrated) ===
+                    if (doTransientPreservation && peakLevelDb > rmsLevelDb + 6.0f)
+                    {
+                        // Reduce gain adjustment during transients to preserve dynamics
+                        float transientAmount = (peakLevelDb - rmsLevelDb - 6.0f) / 12.0f;
+                        transientAmount = juce::jlimit(0.0f, 1.0f, transientAmount) * transientPres;
+                        gainNeeded *= (1.0f - transientAmount * 0.7f);
+                    }
+                    
+                    // Soft knee for phrase gain
+                    if (std::abs(gainNeeded) < kneeWidthDb)
+                    {
+                        float ratio = gainNeeded / kneeWidthDb;
+                        gainNeeded = gainNeeded * (0.5f + 0.5f * ratio * ratio * (gainNeeded > 0 ? 1.0f : -1.0f));
+                    }
+                    
+                    currentPhraseGainDb = juce::jlimit(-range, range, gainNeeded);
                 }
             }
             else
             {
-                // Silence
+                // Silence detected
                 silenceSampleCount++;
                 
-                if (inPhrase && silenceSampleCount > silenceMinSamples)
+                // Use hold time concept: don't end phrase immediately
+                double sr = getSampleRate();
+                int holdSamplesForPhrase = static_cast<int>(holdMs.load() * sr / 1000.0);
+                holdSamplesForPhrase = juce::jmax(holdSamplesForPhrase, silenceMinSamples);
+                
+                if (inPhrase && silenceSampleCount > holdSamplesForPhrase)
                 {
                     // End of phrase detected
                     inPhrase = false;
+                    phraseEndSample = sample;
                 }
             }
             
-            // Smoothly transition the phrase gain
+            // Target gain: phrase gain when in phrase, silence gain otherwise
             float targetPhraseGain = inPhrase ? currentPhraseGainDb : getSilenceGainDb();
-            phraseGainSmoother = phraseGainSmoothCoeff * phraseGainSmoother + 
-                                 (1.0f - phraseGainSmoothCoeff) * targetPhraseGain;
+            
+            // Use attack/release coefficients instead of fixed smoothing
+            // Attack when gain is increasing (getting louder), release when decreasing
+            float gainDelta = targetPhraseGain - phraseGainSmoother;
+            double sr = getSampleRate();
+            float phraseSmooth;
+            if (gainDelta > 0)
+            {
+                // Gain increasing (boost) - use attack time
+                phraseSmooth = std::exp(-1.0f / (attackMs.load() * static_cast<float>(sr) / 1000.0f));
+            }
+            else
+            {
+                // Gain decreasing (cut) - use release time  
+                phraseSmooth = std::exp(-1.0f / (releaseMs.load() * static_cast<float>(sr) / 1000.0f));
+            }
+            
+            phraseGainSmoother = phraseSmooth * phraseGainSmoother + (1.0f - phraseSmooth) * targetPhraseGain;
             
             targetGainDb = phraseGainSmoother;
             
@@ -795,7 +1049,8 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     {
         display->pushSamples(inputSamples.data(), outputSamples.data(), 
                              gainSamples.data(), numSamples);
-        display->setTargetLevel(targetLevel);
+        // Use raw parameter value for immediate visual response
+        display->setTargetLevel(targetLevelRaw);
     }
 
     // Output metering - use PEAK for display (matches DAW meters)
@@ -834,6 +1089,7 @@ void VocalRiderAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty("smartSilence", smartSilenceEnabled.load(), nullptr);
     state.setProperty("scrollSpeed", scrollSpeedSetting.load(), nullptr);
     state.setProperty("presetIndex", currentPresetIndex.load(), nullptr);
+    state.setProperty("windowSizeIndex", windowSizeIndex.load(), nullptr);
     
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
     copyXmlToBinary(*xml, destData);
@@ -877,6 +1133,8 @@ void VocalRiderAudioProcessor::setStateInformation(const void* data, int sizeInB
             setScrollSpeed(static_cast<float>(state.getProperty("scrollSpeed")));
         if (state.hasProperty("presetIndex"))
             setCurrentPresetIndex(static_cast<int>(state.getProperty("presetIndex")));
+        if (state.hasProperty("windowSizeIndex"))
+            setWindowSizeIndex(static_cast<int>(state.getProperty("windowSizeIndex")));
     }
 }
 
@@ -953,6 +1211,11 @@ void VocalRiderAudioProcessor::setBreathReduction(float reductionDb)
 void VocalRiderAudioProcessor::setTransientPreservation(float amount)
 {
     transientPreservation.store(juce::jlimit(0.0f, 1.0f, amount));
+}
+
+bool VocalRiderAudioProcessor::hasSidechainInput() const
+{
+    return getTotalNumInputChannels() > 2;  // More than stereo means sidechain is connected
 }
 
 void VocalRiderAudioProcessor::setAutomationMode(AutomationMode mode)
@@ -1102,7 +1365,7 @@ void VocalRiderAudioProcessor::setHoldMs(float ms)
     holdMs.store(juce::jlimit(0.0f, 500.0f, ms));
 }
 
-void VocalRiderAudioProcessor::updateAttackReleaseFromSpeed(float speed)
+void VocalRiderAudioProcessor::updateAttackReleaseFromSpeed(float speed, bool updateUI)
 {
     // Map speed to attack/release
     float normalizedSpeed = juce::jlimit(0.0f, 100.0f, speed) / 100.0f;
@@ -1111,8 +1374,19 @@ void VocalRiderAudioProcessor::updateAttackReleaseFromSpeed(float speed)
     float attack = juce::jmap(speedFactor, 500.0f, 5.0f);
     float release = juce::jmap(speedFactor, 1000.0f, 20.0f);
     
+    // Update internal values
     attackMs.store(attack);
     releaseMs.store(release);
+    
+    // Only update APVTS parameters when explicitly requested (user moving speed slider)
+    // This prevents overwriting saved parameter values during initialization
+    if (updateUI)
+    {
+        if (auto* param = apvts.getParameter(attackParamId))
+            param->setValueNotifyingHost(param->convertTo0to1(attack));
+        if (auto* param = apvts.getParameter(releaseParamId))
+            param->setValueNotifyingHost(param->convertTo0to1(release));
+    }
 }
 
 void VocalRiderAudioProcessor::loadPreset(int index)

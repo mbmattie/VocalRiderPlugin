@@ -1,5 +1,6 @@
 # Build directories
 build/
+build_asan/
 Builds/
 *.xcodeproj/
 *.xcworkspace/
@@ -55,3 +56,7 @@ JuceLibraryCode/
 *.suo
 *.userosscache
 *.sln.docstates
+
+# Installer build artifacts
+installer/output/
+installer/staging/

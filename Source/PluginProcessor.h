@@ -101,6 +101,7 @@ public:
     // Natural Mode (phrase-based processing)
     void setNaturalModeEnabled(bool enabled);
     bool isNaturalModeEnabled() const { return naturalModeEnabled.load(); }
+    bool isInPhrase() const { return inPhrase; }  // For visual feedback
     
     // Smart Silence (silence reduction)
     void setSmartSilenceEnabled(bool enabled) { smartSilenceEnabled.store(enabled); }
@@ -127,6 +128,18 @@ public:
     void setOutputTrim(float trimDb) { outputTrimDb.store(juce::jlimit(-12.0f, 12.0f, trimDb)); }
     float getOutputTrim() const { return outputTrimDb.load(); }
     
+    // Sidechain control (reference track matching)
+    void setSidechainEnabled(bool enabled) { sidechainEnabled.store(enabled); }
+    bool isSidechainEnabled() const { return sidechainEnabled.load(); }
+    void setSidechainAmount(float amount) { sidechainAmount.store(juce::jlimit(0.0f, 100.0f, amount)); }
+    float getSidechainAmount() const { return sidechainAmount.load(); }
+    bool hasSidechainInput() const;  // Returns true if sidechain bus is connected
+    float getSidechainLevelDb() const { return sidechainLevelDb.load(); }
+    
+    // Vocal focus filter (frequency-weighted detection)
+    void setVocalFocusEnabled(bool enabled) { vocalFocusEnabled.store(enabled); }
+    bool isVocalFocusEnabled() const { return vocalFocusEnabled.load(); }
+    
     // Scroll speed for waveform (saved in state)
     void setScrollSpeed(float speed) { scrollSpeedSetting.store(speed); }
     float getScrollSpeed() const { return scrollSpeedSetting.load(); }
@@ -134,6 +147,10 @@ public:
     // Currently selected preset index (saved in state)
     void setCurrentPresetIndex(int index) { currentPresetIndex.store(index); }
     int getCurrentPresetIndex() const { return currentPresetIndex.load(); }
+    
+    // Window size (saved in state: 0=Small, 1=Medium, 2=Large)
+    void setWindowSizeIndex(int index) { windowSizeIndex.store(index); }
+    int getWindowSizeIndex() const { return windowSizeIndex.load(); }
     
     // Automation write mode
     void setAutomationMode(AutomationMode mode);
@@ -153,7 +170,8 @@ public:
     float getHoldMs() const { return holdMs.load(); }
 
     // Update attack/release from speed (for linking)
-    void updateAttackReleaseFromSpeed(float speed);
+    // updateUI: if true, also updates APVTS parameters (for UI slider movement)
+    void updateAttackReleaseFromSpeed(float speed, bool updateUI = false);
 
     //==============================================================================
     // Presets
@@ -180,6 +198,16 @@ public:
     static const juce::String speedParamId;
     static const juce::String rangeParamId;
     static const juce::String gainOutputParamId;
+    
+    // Advanced parameter IDs
+    static const juce::String attackParamId;
+    static const juce::String releaseParamId;
+    static const juce::String holdParamId;
+    static const juce::String breathReductionParamId;
+    static const juce::String transientPreservationParamId;
+    static const juce::String naturalModeParamId;
+    static const juce::String smartSilenceParamId;
+    static const juce::String outputTrimParamId;
 
     //==============================================================================
     // Audio file playback (for standalone testing)
@@ -239,14 +267,15 @@ private:
     
     //==============================================================================
     // Phrase-based processing (Natural Mode)
-    std::atomic<bool> naturalModeEnabled { false };
+    std::atomic<bool> naturalModeEnabled { true };  // Default ON
     
     // Smart Silence
     std::atomic<bool> smartSilenceEnabled { false };
     
     // UI state to persist
-    std::atomic<float> scrollSpeedSetting { 0.33f };  // Default to medium (15s)
+    std::atomic<float> scrollSpeedSetting { 0.5f };  // Default to medium (50%)
     std::atomic<int> currentPresetIndex { 0 };  // 0 = no preset selected
+    std::atomic<int> windowSizeIndex { 1 };  // 0=Small, 1=Medium, 2=Large (default Medium)
     
     // Learning mode
     std::atomic<bool> isLearning { false };
@@ -263,6 +292,11 @@ private:
     int silenceMinSamples = 0;
     float phraseGainSmoother = 0.0f;
     static constexpr float phraseGainSmoothCoeff = 0.9995f;
+    
+    // Intelligent phrase boundary detection
+    float phraseLastLevelDb = -100.0f;  // For energy delta tracking
+    int phraseStartSample = 0;           // Sample where current phrase started
+    int phraseEndSample = 0;             // Sample where last phrase ended
     
     // Phrase lookahead buffer
     std::vector<float> phraseLookaheadBuffer;
@@ -293,6 +327,20 @@ private:
     std::atomic<float> outputTrimDb { 0.0f };  // -12 to +12 dB
     
     //==============================================================================
+    // Sidechain (reference track matching)
+    std::atomic<bool> sidechainEnabled { false };
+    std::atomic<float> sidechainAmount { 50.0f };  // 0-100% blend with sidechain level
+    std::atomic<float> sidechainLevelDb { -100.0f };  // Current sidechain level for metering
+    RMSDetector sidechainRmsDetector;
+    
+    //==============================================================================
+    // Vocal focus filter (frequency-weighted detection)
+    std::atomic<bool> vocalFocusEnabled { true };  // Default ON for better vocal detection
+    juce::dsp::StateVariableTPTFilter<float> vocalFocusHighPass;  // Cut below ~200Hz
+    juce::dsp::StateVariableTPTFilter<float> vocalFocusLowPass;   // Cut above ~4kHz
+    juce::dsp::StateVariableTPTFilter<float> vocalFocusBandBoost; // Boost 1-3kHz presence
+    
+    //==============================================================================
     // Automation write
     std::atomic<AutomationMode> automationMode { AutomationMode::Off };  // Default to Off
     std::atomic<float> gainOutputParam { 0.0f };
@@ -305,9 +353,19 @@ private:
     std::atomic<float>* speedParam = nullptr;
     std::atomic<float>* rangeParam = nullptr;
     
+    // Advanced cached parameters
+    std::atomic<float>* attackParam = nullptr;
+    std::atomic<float>* releaseParam = nullptr;
+    std::atomic<float>* holdParam = nullptr;
+    std::atomic<float>* breathReductionParam = nullptr;
+    std::atomic<float>* transientPreservationParam = nullptr;
+    std::atomic<float>* naturalModeParam = nullptr;
+    std::atomic<float>* smartSilenceParam = nullptr;
+    std::atomic<float>* outputTrimParam = nullptr;
+    
     // Smoothed parameters (to prevent clicks/pops on rapid changes)
     float smoothedTargetLevel = -18.0f;
-    float smoothedRange = 12.0f;
+    float smoothedRange = 6.0f;  // Default 6dB range
     static constexpr float paramSmoothingCoeff = 0.85f;  // ~3ms at 44.1kHz - very fast response
 
     // Metering values (for UI)

@@ -8,9 +8,9 @@ set -e  # Exit on error
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${SCRIPT_DIR}/build/VocalRider_artefacts"
 
-# Plugin paths
-AU_SOURCE="${BUILD_DIR}/AU/magic.RIDE.component"
-VST3_SOURCE="${BUILD_DIR}/VST3/magic.RIDE.vst3"
+# Plugin paths (Debug build)
+AU_SOURCE="${BUILD_DIR}/Debug/AU/magic.RIDE.component"
+VST3_SOURCE="${BUILD_DIR}/Debug/VST3/magic.RIDE.vst3"
 
 # System plugin directories
 AU_DEST="${HOME}/Library/Audio/Plug-Ins/Components/magic.RIDE.component"

@@ -183,7 +183,10 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     //==============================================================================
     // Control Panel (floating tab)
     
-    addAndMakeVisible(controlPanel);
+    // Control panel is invisible - just used for layout reference
+    // The knobs are placed directly on the editor, not in this panel
+    controlPanel.setVisible(false);
+    controlPanel.setInterceptsMouseClicks(false, false);
     
     // Animated tooltip (added to be on top)
     addAndMakeVisible(valueTooltip);
@@ -200,6 +203,9 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     // Target knob (LARGE, center)
     setupSliderWithTooltip(targetSlider, " dB");
     targetSlider.onValueChange = [this]() {
+        // Update waveform display immediately when target changes
+        waveformDisplay.setTargetLevel(static_cast<float>(targetSlider.getValue()));
+        
         if (targetSlider.isMouseOverOrDragging()) {
             bool showHelp = (currentHoveredComponent == &targetSlider && hoverTimeCounter >= helpHoverDelayTicks);
             juce::String text = showHelp ? getHelpText("TARGET") : juce::String(targetSlider.getValue(), 1) + " dB";
@@ -252,7 +258,7 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     // Speed knob
     setupSliderWithTooltip(speedSlider, "%");
     speedSlider.onValueChange = [this] {
-        audioProcessor.updateAttackReleaseFromSpeed(static_cast<float>(speedSlider.getValue()));
+        audioProcessor.updateAttackReleaseFromSpeed(static_cast<float>(speedSlider.getValue()), true);  // true = update UI sliders
         if (advancedPanelVisible) updateAdvancedControls();
         if (speedSlider.isMouseOverOrDragging()) {
             bool showHelp = (currentHoveredComponent == &speedSlider && hoverTimeCounter >= helpHoverDelayTicks);
@@ -276,6 +282,10 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     speedLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getTextColour());
     speedLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(speedLabel);
+    
+    // Speed icons (turtle = slow on left, rabbit = fast on right)
+    addAndMakeVisible(turtleIcon);
+    addAndMakeVisible(rabbitIcon);
     
     // Mini gain meter
     addAndMakeVisible(miniGainMeter);
@@ -315,45 +325,8 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     // Old Learn button - hidden (functionality moved to autoTargetButton)
     // learnButton kept for backwards compatibility but not shown
     
-    // Speed button in bottom bar - controls waveform scroll speed
-    waveformDisplay.setScrollSpeed(0.33f);  // Default to medium speed (15s)
-    speedButton.setLabel("15s");
-    speedButton.onClick = [this] {
-        juce::PopupMenu menu;
-        menu.setLookAndFeel(&getLookAndFeel());
-        float currentSpeed = waveformDisplay.getScrollSpeed();
-        menu.addItem(1, "Fast (10s)", true, currentSpeed > 0.4f);
-        menu.addItem(2, "Medium (15s)", true, currentSpeed > 0.28f && currentSpeed <= 0.4f);
-        menu.addItem(3, "Slow (20s)", true, currentSpeed <= 0.28f);
-        
-        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&speedButton),
-            [this](int result) {
-                if (result == 1) { 
-                    waveformDisplay.setScrollSpeed(0.5f); 
-                    speedButton.setLabel("10s"); 
-                    audioProcessor.setScrollSpeed(0.5f);
-                }
-                else if (result == 2) { 
-                    waveformDisplay.setScrollSpeed(0.33f); 
-                    speedButton.setLabel("15s"); 
-                    audioProcessor.setScrollSpeed(0.33f);
-                }
-                else if (result == 3) { 
-                    waveformDisplay.setScrollSpeed(0.25f); 
-                    speedButton.setLabel("20s"); 
-                    audioProcessor.setScrollSpeed(0.25f);
-                }
-            });
-    };
-    speedButton.onMouseEnter = [this]() {
-        currentHoveredComponent = &speedButton;
-        hoverTimeCounter = 0;
-    };
-    speedButton.onMouseExit = [this]() {
-        if (currentHoveredComponent == &speedButton) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
-        valueTooltip.hideTooltip();
-    };
-    addAndMakeVisible(speedButton);
+    // Speed button removed - scroll speed is now fixed at 8 seconds
+    // speedButton hidden but kept for backwards compatibility
     
     // Automation mode selector - matches enum order!
     // Enum: Off=0, Read=1, Touch=2, Latch=3, Write=4
@@ -409,26 +382,24 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
         valueTooltip.hideTooltip();
     };
     
-    // Help button toggle
-    // Help button now opens About dialog
-    helpButton.setClickingTogglesState(false);
+    // Help button opens custom About dialog with fade animation (toggle behavior like gear)
+    helpButton.setClickingTogglesState(true);
     helpButton.onClick = [this] {
-        // Show About dialog
-        juce::String aboutText = "magic.RIDE v" + juce::String(JucePlugin_VersionString) + "\n\n"
-            "Precision Vocal Leveling\n\n"
-            "by MBM Audio\n"
-            "musicbymattie.com\n\n"
-            "Hover over any control for 3 seconds\n"
-            "to see help information.";
-        
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::MessageBoxIconType::InfoIcon,
-            "About magic.RIDE",
-            aboutText,
-            "OK",
-            this);
+        if (helpButton.getToggleState())
+            aboutDialog.show();
+        else
+            aboutDialog.hide();
     };
     addAndMakeVisible(helpButton);
+    
+    // Setup About dialog panel (initially hidden)
+    aboutDialog.setVersion(JucePlugin_VersionString);
+    aboutDialog.setVisible(false);
+    aboutDialog.onClose = [this] {
+        // Sync button state when dialog is closed by clicking on it
+        helpButton.setToggleState(false, juce::dontSendNotification);
+    };
+    addAndMakeVisible(aboutDialog);
     
     // Resize button callbacks are set up earlier where it's added to bottomBar
     
@@ -439,6 +410,22 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
         audioProcessor.getApvts(), VocalRiderAudioProcessor::rangeParamId, rangeSlider);
     speedAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.getApvts(), VocalRiderAudioProcessor::speedParamId, speedSlider);
+    
+    // Advanced parameter attachments
+    attackAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getApvts(), VocalRiderAudioProcessor::attackParamId, attackSlider);
+    releaseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getApvts(), VocalRiderAudioProcessor::releaseParamId, releaseSlider);
+    holdAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getApvts(), VocalRiderAudioProcessor::holdParamId, holdSlider);
+    breathReductionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getApvts(), VocalRiderAudioProcessor::breathReductionParamId, breathReductionSlider);
+    transientPreservationAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getApvts(), VocalRiderAudioProcessor::transientPreservationParamId, transientPreservationSlider);
+    naturalModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.getApvts(), VocalRiderAudioProcessor::naturalModeParamId, naturalToggle);
+    smartSilenceAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.getApvts(), VocalRiderAudioProcessor::smartSilenceParamId, silenceToggle);
 
     // Initialize undo history with current state
     undoHistory.push_back(getCurrentState());
@@ -683,8 +670,14 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     setupTrimRangeLabel(trimMidLabel, "0");
     setupTrimRangeLabel(trimMaxLabel, "+12");
 
-    // Set initial size to medium
-    setWindowSize(WindowSize::Medium);
+    // Restore window size from saved state (default to Medium)
+    int savedSizeIndex = audioProcessor.getWindowSizeIndex();
+    switch (savedSizeIndex)
+    {
+        case 0: setWindowSize(WindowSize::Small); break;
+        case 2: setWindowSize(WindowSize::Large); break;
+        default: setWindowSize(WindowSize::Medium); break;
+    }
     startTimerHz(30);
     updateAdvancedControls();
 }
@@ -692,6 +685,21 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
 VocalRiderAudioProcessorEditor::~VocalRiderAudioProcessorEditor()
 {
     stopTimer();
+    
+    // Clear ALL attachments BEFORE sliders/buttons are destroyed
+    // This prevents crash when attachment tries to remove listener from destroyed component
+    targetAttachment.reset();
+    rangeAttachment.reset();
+    speedAttachment.reset();
+    attackAttachment.reset();
+    releaseAttachment.reset();
+    holdAttachment.reset();
+    breathReductionAttachment.reset();
+    transientPreservationAttachment.reset();
+    naturalModeAttachment.reset();
+    smartSilenceAttachment.reset();
+    outputTrimAttachment.reset();
+    
     audioProcessor.setWaveformDisplay(nullptr);
     setLookAndFeel(nullptr);
 }
@@ -714,11 +722,7 @@ void VocalRiderAudioProcessorEditor::updateAdvancedControls()
     automationModeComboBox.setSelectedId(static_cast<int>(audioProcessor.getAutomationMode()) + 1, juce::dontSendNotification);
     
     // Scroll speed restoration
-    float scrollSpeed = audioProcessor.getScrollSpeed();
-    waveformDisplay.setScrollSpeed(scrollSpeed);
-    if (scrollSpeed >= 0.45f) speedButton.setLabel("10s");
-    else if (scrollSpeed >= 0.28f) speedButton.setLabel("15s");
-    else speedButton.setLabel("20s");
+    // Scroll speed is now fixed - no restoration needed
     
     // Preset restoration
     int presetIdx = audioProcessor.getCurrentPresetIndex();
@@ -764,7 +768,7 @@ void VocalRiderAudioProcessorEditor::toggleAdvancedPanel()
     holdSlider.setAlpha(alpha);
     breathReductionSlider.setAlpha(alpha);
     transientPreservationSlider.setAlpha(alpha);
-        outputTrimMeter.setAlpha(alpha);
+    outputTrimMeter.setAlpha(alpha);
     attackLabel.setAlpha(alpha);
     releaseLabel.setAlpha(alpha);
     holdLabel.setAlpha(alpha);
@@ -790,24 +794,31 @@ void VocalRiderAudioProcessorEditor::setWindowSize(WindowSize size)
     currentWindowSize = size;
     
     int width, height;
+    int sizeIndex = 1;  // Default to Medium
     switch (size)
     {
         case WindowSize::Small:
             width = smallWidth;
             height = smallHeight;
             resizeButton.currentSize = 0;
+            sizeIndex = 0;
             break;
         case WindowSize::Medium:
             width = mediumWidth;
             height = mediumHeight;
             resizeButton.currentSize = 1;
+            sizeIndex = 1;
             break;
         case WindowSize::Large:
             width = largeWidth;
             height = largeHeight;
             resizeButton.currentSize = 2;
+            sizeIndex = 2;
             break;
     }
+    
+    // Save window size to processor state
+    audioProcessor.setWindowSizeIndex(sizeIndex);
     
     setSize(static_cast<int>(width * uiScaleFactor), static_cast<int>(height * uiScaleFactor));
     resized();
@@ -1030,20 +1041,20 @@ void VocalRiderAudioProcessorEditor::resized()
     // Left side: Footer label (version)
     footerLabel.setBounds(bottomArea.getX() + 8, bottomArea.getY() + 5, 50, 16);
     
-    // Center: Toggle buttons with icons - order: Natural, Smart Silence, Auto-Target, Speed
+    // Center: Toggle buttons - Smart Silence centered under target knob, others around it
     int naturalW = 72;
     int silenceW = 95;  // Wider for "SMART SILENCE"
     int autoTargetW = 90;
-    int speedW = 50;
     int btnGap = 8;
-    int toggleWidth = naturalW + btnGap + silenceW + btnGap + autoTargetW + btnGap + speedW;
-    int toggleStartX = (bottomArea.getWidth() - toggleWidth) / 2;
     int toggleY = bottomArea.getY() + 4;
     
-    naturalToggle.setBounds(toggleStartX, toggleY, naturalW, 18);
-    silenceToggle.setBounds(toggleStartX + naturalW + btnGap, toggleY, silenceW, 18);
-    autoTargetButton.setBounds(toggleStartX + naturalW + btnGap + silenceW + btnGap, toggleY, autoTargetW, 18);
-    speedButton.setBounds(toggleStartX + naturalW + btnGap + silenceW + btnGap + autoTargetW + btnGap, toggleY, speedW, 18);
+    // Center smart silence under target knob (which is at center of window)
+    int btnCenterX = bottomArea.getWidth() / 2;
+    int silenceX = btnCenterX - silenceW / 2;
+    
+    silenceToggle.setBounds(silenceX, toggleY, silenceW, 18);
+    naturalToggle.setBounds(silenceX - btnGap - naturalW, toggleY, naturalW, 18);
+    autoTargetButton.setBounds(silenceX + silenceW + btnGap, toggleY, autoTargetW, 18);
     
     // Automation mode selector (right side, before resize button)
     int autoModeW = 65;
@@ -1180,12 +1191,31 @@ void VocalRiderAudioProcessorEditor::resized()
     speedSlider.setBounds(speedX, knobY + 8, smallKnobSize, smallKnobSize);
     speedLabel.setBounds(speedX, knobY + 8 + smallKnobSize + 2, smallKnobSize, labelHeight);
     
-    // Mini gain meter to the right of speed knob (with numerical readout)
-    int gainMeterX = speedX + smallKnobSize + 12;
-    miniGainMeter.setBounds(gainMeterX, knobY + 8, miniMeterWidth, miniMeterHeight);
-    gainMeterLabel.setBounds(gainMeterX, knobY + 8 + miniMeterHeight + 2, miniMeterWidth, labelHeight);
+    // Turtle (slow) at 7 o'clock position, Rabbit (fast) at 5 o'clock position
+    int iconSize = 16;
+    int knobCenterX = speedX + smallKnobSize / 2;
+    int knobCenterY = knobY + 8 + smallKnobSize / 2;
+    int iconRadius = smallKnobSize / 2 + 8;  // Padding from knob edge
+    
+    // 7 o'clock position (bottom-left) - turtle moved 2-3px more left for visual balance
+    int turtleX = knobCenterX + static_cast<int>(-0.82f * iconRadius) - iconSize / 2;
+    int turtleY = knobCenterY + static_cast<int>(0.62f * iconRadius) - iconSize / 2;
+    turtleIcon.setBounds(turtleX, turtleY, iconSize, iconSize);
+    
+    // 5 o'clock position (bottom-right) - moved 1px left for balance
+    int rabbitX = knobCenterX + static_cast<int>(0.76f * iconRadius) - iconSize / 2;
+    int rabbitY = knobCenterY + static_cast<int>(0.62f * iconRadius) - iconSize / 2;
+    rabbitIcon.setBounds(rabbitX, rabbitY, iconSize, iconSize);
+    
+    // Mini gain meter - hidden (keeping code in case we want it back)
+    miniGainMeter.setVisible(false);
+    gainMeterLabel.setVisible(false);
     
     // Natural and Silence toggles now in bottom bar (positioned elsewhere)
+    
+    // About dialog covers entire window (for click-to-close overlay)
+    aboutDialog.setBounds(getLocalBounds());
+    aboutDialog.toFront(false);  // Keep on top
 }
 
 void VocalRiderAudioProcessorEditor::timerCallback()
@@ -1214,6 +1244,10 @@ void VocalRiderAudioProcessorEditor::timerCallback()
     waveformDisplay.setInputLevel(audioProcessor.getInputLevelDb());
     waveformDisplay.setOutputLevel(audioProcessor.getOutputLevelDb());
     
+    // Update Natural Mode phrase indicator
+    waveformDisplay.setNaturalModeEnabled(audioProcessor.isNaturalModeEnabled());
+    waveformDisplay.setInPhrase(audioProcessor.isInPhrase());
+    
     if (auto* param = audioProcessor.getApvts().getRawParameterValue(VocalRiderAudioProcessor::targetLevelParamId))
         waveformDisplay.setTargetLevel(param->load());
     
@@ -1224,9 +1258,25 @@ void VocalRiderAudioProcessorEditor::timerCallback()
         waveformDisplay.setRange(currentRange);
     }
     
-    // Update mini gain meter
+    // Update mini gain meter with decay when no audio
     float currentGain = audioProcessor.getCurrentGainDb();
-    miniGainMeter.setGainDb(currentGain);
+    float inputLevel = audioProcessor.getInputLevelDb();
+    
+    // If input is very quiet (silence), decay displayed gain toward zero
+    if (inputLevel < -50.0f)
+    {
+        // Decay toward zero - smooth exponential decay
+        displayedGainDb *= 0.92f;  // ~3dB per 60Hz frame = fast decay
+        if (std::abs(displayedGainDb) < 0.1f)
+            displayedGainDb = 0.0f;
+    }
+    else
+    {
+        // Follow the actual gain
+        displayedGainDb = currentGain;
+    }
+    
+    miniGainMeter.setGainDb(displayedGainDb);
     miniGainMeter.setRangeDb(currentRange);
     
     // Auto-Target learning mode - collect data and analyze
@@ -1320,8 +1370,6 @@ void VocalRiderAudioProcessorEditor::timerCallback()
                 valueTooltip.showValue("SILENCE", getHelpText("SILENCE"), &silenceToggle, false, true);
             } else if (currentHoveredComponent == &autoTargetButton) {
                 valueTooltip.showValue("AUTO-TARGET", getHelpText("AUTOTARGET"), &autoTargetButton, false, true);
-            } else if (currentHoveredComponent == &speedButton) {
-                valueTooltip.showValue("SPEED", getHelpText("SPEED_BTN"), &speedButton, false, true);
             }
         }
     }
