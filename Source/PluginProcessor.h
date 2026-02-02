@@ -125,7 +125,7 @@ public:
     float getTransientPreservation() const { return transientPreservation.load(); }
     
     // Output trim (makeup gain)
-    void setOutputTrim(float trimDb) { outputTrimDb.store(juce::jlimit(-12.0f, 12.0f, trimDb)); }
+    void setOutputTrim(float trimDb);
     float getOutputTrim() const { return outputTrimDb.load(); }
     
     // Sidechain control (reference track matching)

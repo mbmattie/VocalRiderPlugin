@@ -382,23 +382,16 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
         valueTooltip.hideTooltip();
     };
     
-    // Help button opens custom About dialog with fade animation (toggle behavior like gear)
-    helpButton.setClickingTogglesState(true);
-    helpButton.onClick = [this] {
-        if (helpButton.getToggleState())
-            aboutDialog.show();
-        else
-            aboutDialog.hide();
+    // Help button opens documentation in browser
+    helpButton.setClickingTogglesState(false);
+    helpButton.onClick = [] {
+        juce::URL("https://musicbymattie.com/magic-ride/docs").launchInDefaultBrowser();
     };
     addAndMakeVisible(helpButton);
     
-    // Setup About dialog panel (initially hidden)
+    // Setup About dialog panel (initially hidden) - shown when clicking logo
     aboutDialog.setVersion(JucePlugin_VersionString);
     aboutDialog.setVisible(false);
-    aboutDialog.onClose = [this] {
-        // Sync button state when dialog is closed by clicking on it
-        helpButton.setToggleState(false, juce::dontSendNotification);
-    };
     addAndMakeVisible(aboutDialog);
     
     // Resize button callbacks are set up earlier where it's added to bottomBar
@@ -596,14 +589,20 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
         audioProcessor.setBreathReduction(static_cast<float>(breathReductionSlider.getValue()));
         if (breathReductionSlider.isMouseOverOrDragging()) {
             bool showHelp = (currentHoveredComponent == &breathReductionSlider && hoverTimeCounter >= helpHoverDelayTicks);
-            juce::String text = showHelp ? getHelpText("BREATH") : juce::String(breathReductionSlider.getValue(), 1) + " dB";
+            // Show minus sign to indicate breath reduction (subtracting dB)
+            double val = breathReductionSlider.getValue();
+            juce::String valStr = (val > 0.05 ? "-" : "") + juce::String(val, 1) + " dB";
+            juce::String text = showHelp ? getHelpText("BREATH") : valStr;
             valueTooltip.showValue("BREATH", text, &breathReductionSlider, false, showHelp);
         }
     };
     breathReductionSlider.onMouseEnter = [this]() {
         currentHoveredComponent = &breathReductionSlider;
         hoverTimeCounter = 0;
-        valueTooltip.showValue("BREATH", juce::String(breathReductionSlider.getValue(), 1) + " dB", &breathReductionSlider);
+        // Show minus sign to indicate breath reduction
+        double val = breathReductionSlider.getValue();
+        juce::String valStr = (val > 0.05 ? "-" : "") + juce::String(val, 1) + " dB";
+        valueTooltip.showValue("BREATH", valStr, &breathReductionSlider);
     };
     breathReductionSlider.onMouseExit = [this]() {
         if (currentHoveredComponent == &breathReductionSlider) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }

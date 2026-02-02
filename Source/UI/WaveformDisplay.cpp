@@ -707,9 +707,9 @@ void WaveformDisplay::drawWaveformPaths(juce::Graphics& g)
                 juce::Path inputPath = buildTopOnlyPath(inputTopBuffer, segmentStart, i);
                 if (!inputPath.isEmpty())
                 {
-                    // Fill with natural mode and base opacity adjustment
-                    float fillAlpha = 0.50f * baseOpacity * naturalOpacityMult;  // -10% for gain curve visibility
-                    g.setColour(juce::Colour(0xFF5A6878).withAlpha(fillAlpha));
+                    // Fill with natural mode and base opacity adjustment - darker gray for better contrast
+                    float fillAlpha = 0.55f * baseOpacity * naturalOpacityMult;
+                    g.setColour(juce::Colour(0xFF3A4248).withAlpha(fillAlpha));  // Darker charcoal gray
                     g.fillPath(inputPath);
                     
                     // Stroke the top outline only (build separate path for stroke)
@@ -723,8 +723,9 @@ void WaveformDisplay::drawWaveformPaths(juce::Graphics& g)
                         topOutline.lineTo(offsetX + static_cast<float>(j), offsetY + topY);
                     }
                     
-                    float strokeAlpha = (naturalModeActive ? 0.69f : 0.59f) * baseOpacity * naturalOpacityMult;  // -10%
-                    g.setColour(juce::Colour(0xFFD0D8E0).withAlpha(strokeAlpha));
+                    // Whiter outline for better visibility
+                    float strokeAlpha = (naturalModeActive ? 0.75f : 0.65f) * baseOpacity * naturalOpacityMult;
+                    g.setColour(juce::Colour(0xFFE0E4E8).withAlpha(strokeAlpha));  // Brighter white outline
                     g.strokePath(topOutline, juce::PathStrokeType(1.5f, juce::PathStrokeType::curved,
                                                                    juce::PathStrokeType::rounded));
                 }
@@ -783,9 +784,9 @@ void WaveformDisplay::drawWaveformPaths(juce::Graphics& g)
                 
                 if (!boostPath.isEmpty())
                 {
-                    // Teal fill with base and natural mode opacity
-                    float fillAlpha = 0.36f * baseOpacity * naturalOpacityMult;  // -10% for gain curve visibility
-                    g.setColour(juce::Colour(0xFF4090A0).withAlpha(fillAlpha));
+                    // Darker blue/teal fill for better contrast
+                    float fillAlpha = 0.40f * baseOpacity * naturalOpacityMult;
+                    g.setColour(juce::Colour(0xFF306878).withAlpha(fillAlpha));  // Darker blue-teal
                     g.fillPath(boostPath);
                     
                     // Cyan stroke - just the top outline
@@ -798,8 +799,8 @@ void WaveformDisplay::drawWaveformPaths(juce::Graphics& g)
                         boostOutline.lineTo(x, offsetY + outputY);
                     }
                     
-                    float strokeAlpha = (naturalModeActive ? 0.65f : 0.55f) * baseOpacity * naturalOpacityMult;  // -10%
-                    g.setColour(juce::Colour(0xFF70C8E0).withAlpha(strokeAlpha));
+                    float strokeAlpha = (naturalModeActive ? 0.70f : 0.60f) * baseOpacity * naturalOpacityMult;
+                    g.setColour(juce::Colour(0xFF50A8C8).withAlpha(strokeAlpha));  // Slightly darker cyan outline
                     g.strokePath(boostOutline, juce::PathStrokeType(1.5f, juce::PathStrokeType::curved,
                                                                      juce::PathStrokeType::rounded));
                 }
@@ -829,9 +830,9 @@ void WaveformDisplay::drawWaveformPaths(juce::Graphics& g)
                 
                 if (!cutPath.isEmpty())
                 {
-                    // Purple fill with base and natural mode opacity
-                    float fillAlpha = 0.36f * baseOpacity * naturalOpacityMult;  // -10% for gain curve visibility
-                    g.setColour(juce::Colour(0xFF806098).withAlpha(fillAlpha));
+                    // Darker purple fill for better contrast
+                    float fillAlpha = 0.40f * baseOpacity * naturalOpacityMult;
+                    g.setColour(juce::Colour(0xFF584068).withAlpha(fillAlpha));  // Darker purple
                     g.fillPath(cutPath);
                     
                     // Purple stroke - top outline only
@@ -846,8 +847,8 @@ void WaveformDisplay::drawWaveformPaths(juce::Graphics& g)
                         cutOutline.lineTo(x, offsetY + outputY);
                     }
                     
-                    float strokeAlpha = (naturalModeActive ? 0.65f : 0.55f) * baseOpacity * naturalOpacityMult;  // -10%
-                    g.setColour(juce::Colour(0xFFA078C0).withAlpha(strokeAlpha));
+                    float strokeAlpha = (naturalModeActive ? 0.70f : 0.60f) * baseOpacity * naturalOpacityMult;
+                    g.setColour(juce::Colour(0xFF8860A0).withAlpha(strokeAlpha));  // Slightly darker purple outline
                     g.strokePath(cutOutline, juce::PathStrokeType(1.5f, juce::PathStrokeType::curved,
                                                                    juce::PathStrokeType::rounded));
                 }

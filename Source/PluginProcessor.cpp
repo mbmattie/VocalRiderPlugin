@@ -831,6 +831,15 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 gainNeeded = juce::jmin(gainNeeded, -breathReduce);
             }
             
+            // === TRANSIENT PRESERVATION (Standard Mode) ===
+            if (doTransientPreservation && peakLevelDb > rmsLevelDb + 6.0f)
+            {
+                // Reduce gain adjustment during transients to preserve dynamics
+                float transientAmount = (peakLevelDb - rmsLevelDb - 6.0f) / 12.0f;
+                transientAmount = juce::jlimit(0.0f, 1.0f, transientAmount) * transientPres;
+                gainNeeded *= (1.0f - transientAmount * 0.7f);
+            }
+            
             // Soft knee
             if (std::abs(gainNeeded) < kneeWidthDb)
             {
@@ -892,18 +901,8 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 float gain = lookAheadBufferFilled ? lookAheadGainBuffer[static_cast<size_t>(readPos)] 
                                                    : precomputedGains[static_cast<size_t>(sample)];
                 
-                float processed;
-                if (doTransientPreservation && transientPres > 0.0f)
-                {
-                    // Preserve transients: blend between full gain and unity
-                    float blendedGain = 1.0f + (gain - 1.0f) * (1.0f - transientPres);
-                    processed = delayedSample * blendedGain;
-                }
-                else
-                {
-                    processed = delayedSample * gain;
-                }
-                
+                // Apply the precomputed gain (transient preservation already applied during calculation)
+                float processed = delayedSample * gain;
                 channelData[sample] = softClip(processed);
             }
             
@@ -925,20 +924,9 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             {
                 float* channelData = buffer.getWritePointer(channel);
                 float inputSample = channelData[sample];
-                float processed;
                 
-                if (doTransientPreservation && transientPres > 0.0f)
-                {
-                    // Blend between unity and full gain based on transient preservation
-                    float blendedGain = 1.0f + (gainLinear - 1.0f) * (1.0f - transientPres);
-                    processed = inputSample * blendedGain;
-                }
-                else
-                {
-                    // Standard gain application
-                    processed = inputSample * gainLinear;
-                }
-                
+                // Apply the precomputed gain (transient preservation already applied during calculation)
+                float processed = inputSample * gainLinear;
                 channelData[sample] = softClip(processed);
             }
         }
@@ -1211,6 +1199,18 @@ void VocalRiderAudioProcessor::setBreathReduction(float reductionDb)
 void VocalRiderAudioProcessor::setTransientPreservation(float amount)
 {
     transientPreservation.store(juce::jlimit(0.0f, 1.0f, amount));
+}
+
+void VocalRiderAudioProcessor::setOutputTrim(float trimDb)
+{
+    float clamped = juce::jlimit(-12.0f, 12.0f, trimDb);
+    outputTrimDb.store(clamped);
+    
+    // Also update the APVTS parameter so it syncs with processBlock
+    if (auto* param = apvts.getParameter(outputTrimParamId))
+    {
+        param->setValueNotifyingHost(param->convertTo0to1(clamped));
+    }
 }
 
 bool VocalRiderAudioProcessor::hasSidechainInput() const
