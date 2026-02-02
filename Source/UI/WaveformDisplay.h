@@ -154,7 +154,7 @@ private:
     // Areas
     juce::Rectangle<float> waveformArea;
     static constexpr int handleAreaWidth = 0;
-    static constexpr int ioMeterWidth = 44;  // Wider for better readout display
+    static constexpr int ioMeterWidth = 36;  // Narrower to give more space to waveform
     
     // Scroll timing - fixed pixels per second (independent of display size)
     static constexpr float pixelsPerSecondFixed = 150.0f;  // Constant scroll rate
@@ -208,6 +208,9 @@ private:
     std::atomic<float> currentGainDb { 0.0f };
     float gainPeakHoldDb = 0.0f;
     int gainPeakHoldCounter = 0;
+    float smoothedReadoutGainDb = 0.0f;  // Smoothed value for readable text display
+    float smoothedMeterGainDb = 0.0f;    // Smoothed value for meter bar (faster response)
+    float smoothedPeakMeterDb = -100.0f; // Smoothed value for peak/level meter
 
     // Drag state
     DragTarget currentDragTarget = DragTarget::None;

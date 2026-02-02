@@ -31,7 +31,7 @@ void WaveformDisplay::resized()
     auto bounds = getLocalBounds().toFloat();
     
     waveformArea = bounds;
-    waveformArea.removeFromRight(static_cast<float>(ioMeterWidth) + 4.0f);
+    waveformArea.removeFromRight(static_cast<float>(ioMeterWidth));  // No gap - flush with meters
     
     // Round to nearest integer to ensure perfect alignment between waveform and grid lines
     // This prevents scaling artifacts that cause misalignment at different sizes
@@ -986,7 +986,7 @@ void WaveformDisplay::paint(juce::Graphics& g)
         return;
     
     drawGridLines(g);
-    drawTargetAndRangeLines(g);
+    drawTargetAndRangeLines(g);  // Draw behind waveforms
     
     // Draw Natural Mode phrase indicator
     if (naturalModeActive)
@@ -1001,7 +1001,7 @@ void WaveformDisplay::paint(juce::Graphics& g)
     // Draw waveforms as closed paths (fill + stroke together)
     drawWaveformPaths(g);
     
-    // Draw smooth gain curve path (fades during silence)
+    // Draw smooth gain curve path (fades during silence) - on top of waveforms
     if (gainCurveOpacity > 0.02f)
     {
         drawGainCurvePath(g);
@@ -1111,30 +1111,34 @@ void WaveformDisplay::drawTargetAndRangeLines(juce::Graphics& g)
     juce::Colour targetPurpleDark(0xFF9060D0);   // Purple
     juce::Colour targetPurpleLight(0xFFD0A0FF);  // Light purple
     
+    // End lines slightly before right edge so they don't poke past waveform
+    float lineRightEdge = waveformArea.getRight() - 2.0f;
+    float lineWidth = lineRightEdge - waveformArea.getX();
+    
     // Range fill (subtle)
     g.setColour(rangeColour.withAlpha(0.04f));
-    g.fillRect(waveformArea.getX(), boostY, waveformArea.getWidth(), cutY - boostY);
+    g.fillRect(waveformArea.getX(), boostY, lineWidth, cutY - boostY);
     
     // Boost range line - DASHED GRAY
     float dashLengths[] = { 6.0f, 4.0f };
     g.setColour(rangeColour.withAlpha(0.6f));
-    g.drawDashedLine(juce::Line<float>(waveformArea.getX(), boostY, waveformArea.getRight(), boostY),
+    g.drawDashedLine(juce::Line<float>(waveformArea.getX(), boostY, lineRightEdge, boostY),
                      dashLengths, 2, 1.0f);
     
     // Cut range line - DASHED GRAY
     g.setColour(rangeColour.withAlpha(0.6f));
-    g.drawDashedLine(juce::Line<float>(waveformArea.getX(), cutY, waveformArea.getRight(), cutY),
+    g.drawDashedLine(juce::Line<float>(waveformArea.getX(), cutY, lineRightEdge, cutY),
                      dashLengths, 2, 1.0f);
     
     // Target line - GRADIENT (purple to light purple)
     {
         juce::ColourGradient targetGrad(
             targetPurpleDark, waveformArea.getX(), targetY,
-            targetPurpleLight, waveformArea.getRight(), targetY,
+            targetPurpleLight, lineRightEdge, targetY,
             false
         );
         g.setGradientFill(targetGrad);
-        g.fillRect(waveformArea.getX(), targetY - 1.0f, waveformArea.getWidth(), 2.0f);
+        g.fillRect(waveformArea.getX(), targetY - 1.0f, lineWidth, 2.0f);
     }
     
     // === LEFT SIDE LABELS - ABOVE their lines ===
@@ -1179,19 +1183,23 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
     g.fillRect(fullMeterArea);
     
     // Reserve space at top for readouts
-    float readoutHeight = 18.0f;
-    float topPadding = 4.0f;
-    float bottomPadding = 8.0f;
+    float readoutHeight = 14.0f;  // Smaller readout area
+    float topPadding = 3.0f;
+    float bottomPadding = 6.0f;
     
     auto meterArea = fullMeterArea;
     auto readoutArea = meterArea.removeFromTop(readoutHeight);
     meterArea.removeFromTop(topPadding);
     meterArea.removeFromBottom(bottomPadding);
-    meterArea.removeFromLeft(6.0f);
-    meterArea.removeFromRight(6.0f);
     
+    // Center the meters: total meter content = 10 + 6 + 10 = 26px
     float meterWidth = 10.0f;
     float meterGap = 6.0f;
+    float totalMeterWidth = meterWidth * 2 + meterGap;  // 26px
+    float sidePadding = (meterArea.getWidth() - totalMeterWidth) / 2.0f;
+    meterArea.removeFromLeft(sidePadding);
+    meterArea.removeFromRight(sidePadding);
+    
     float meterHeight = meterArea.getHeight();
     
     // === LEFT METER: Classic peak meter with green-to-yellow-to-red gradient ===
@@ -1202,6 +1210,10 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
     float inputDb = inputLevelDb.load();
     float outputDb = outputLevelDb.load();
     float peakDb = juce::jmax(inputDb, outputDb);
+    
+    // Smooth the peak meter for less jittery display (faster response)
+    float peakSmoothCoeff = 0.5f;
+    smoothedPeakMeterDb = peakSmoothCoeff * smoothedPeakMeterDb + (1.0f - peakSmoothCoeff) * peakDb;
     
     // Update peak hold
     if (peakDb > inputPeakHoldDb)
@@ -1225,13 +1237,13 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
         g.fillRoundedRectangle(peakMeterBounds, 2.0f);
         
         // Extended range: -64dB to +6dB to match waveform display
-        // Only show meter if there's actual signal (not -infinity)
-        float normalized = juce::jmap(peakDb, -64.0f, 6.0f, 0.0f, 1.0f);
+        // Use smoothed value for less jittery display
+        float normalized = juce::jmap(smoothedPeakMeterDb, -64.0f, 6.0f, 0.0f, 1.0f);
         normalized = juce::jlimit(0.0f, 1.0f, normalized);
         float fillHeight = normalized * meterHeight;
         
         // Don't draw if signal is essentially silent (below -60dB)
-        if (fillHeight > 0 && peakDb > -60.0f)
+        if (fillHeight > 0 && smoothedPeakMeterDb > -60.0f)
         {
             auto fillBounds = peakMeterBounds.withTop(peakMeterBounds.getBottom() - fillHeight);
             
@@ -1278,6 +1290,15 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
     auto gainMeterBounds = meterArea.removeFromLeft(meterWidth);
     
     float gainDb = currentGainDb.load();
+    
+    // Smooth the meter bar value (faster response, less flicker)
+    float meterSmoothCoeff = 0.7f;  // Faster than text, but still smooth
+    smoothedMeterGainDb = meterSmoothCoeff * smoothedMeterGainDb + (1.0f - meterSmoothCoeff) * gainDb;
+    
+    // Smooth the readout value for stability (slower response for text display)
+    float textSmoothCoeff = 0.85f;  // Slower/smoother for readable text
+    smoothedReadoutGainDb = textSmoothCoeff * smoothedReadoutGainDb + (1.0f - textSmoothCoeff) * gainDb;
+    
     float boost = boostRangeDb.load();
     float cut = cutRangeDb.load();
     
@@ -1293,9 +1314,10 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
         g.setColour(juce::Colour(0xFF5A5F6A));
         g.fillRect(gainMeterBounds.getX(), centerY - 0.5f, gainMeterBounds.getWidth(), 1.0f);
         
-        if (gainDb > 0.1f)
+        // Use smoothed value for meter bar display
+        if (smoothedMeterGainDb > 0.1f)
         {
-            float normalizedGain = juce::jmin(gainDb / boost, 1.0f);
+            float normalizedGain = juce::jmin(smoothedMeterGainDb / boost, 1.0f);
             float barHeight = normalizedGain * halfHeight;
             auto boostBar = gainMeterBounds.withHeight(barHeight).withBottomY(centerY);
             
@@ -1307,9 +1329,9 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
             g.setGradientFill(boostGrad);
             g.fillRoundedRectangle(boostBar, 1.0f);
         }
-        else if (gainDb < -0.1f)
+        else if (smoothedMeterGainDb < -0.1f)
         {
-            float normalizedGain = juce::jmin(-gainDb / cut, 1.0f);
+            float normalizedGain = juce::jmin(-smoothedMeterGainDb / cut, 1.0f);
             float barHeight = normalizedGain * halfHeight;
             auto cutBar = gainMeterBounds.withHeight(barHeight).withY(centerY);
             
@@ -1323,8 +1345,8 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
         }
     }
     
-    // === READOUTS AT TOP - Better centered ===
-    g.setFont(CustomLookAndFeel::getPluginFont(9.0f, false));
+    // === READOUTS AT TOP - Smaller font to fit narrow meters ===
+    g.setFont(CustomLookAndFeel::getPluginFont(8.0f, false));
     
     // Peak meter readout - centered over peak meter
     float peakReadoutCenterX = peakMeterBounds.getCentreX();
@@ -1344,29 +1366,30 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
         else
             g.setColour(juce::Colour(0xFF6AC060));
     }
-    g.drawText(peakText, static_cast<int>(peakReadoutCenterX - 12), static_cast<int>(readoutArea.getY() + 2), 
-               24, 14, juce::Justification::centred);
+    g.drawText(peakText, static_cast<int>(peakReadoutCenterX - 10), static_cast<int>(readoutArea.getY() + 1), 
+               20, 12, juce::Justification::centred);
     
-    // Gain meter readout - centered over gain meter
+    // Gain meter readout - centered over gain meter (with decimal for precision)
+    // Use smoothed value for more readable/stable display
     float gainReadoutCenterX = gainMeterBounds.getCentreX();
     juce::String gainText;
-    if (std::abs(gainDb) < 0.1f)
+    if (std::abs(smoothedReadoutGainDb) < 0.1f)
     {
         gainText = "0";
         g.setColour(juce::Colour(0xFF808080));
     }
-    else if (gainDb > 0)
+    else if (smoothedReadoutGainDb > 0)
     {
-        gainText = "+" + juce::String(gainDb, 1);
+        gainText = "+" + juce::String(smoothedReadoutGainDb, 1);
         g.setColour(juce::Colour(0xFF00D4FF));
     }
     else
     {
-        gainText = juce::String(gainDb, 1);
+        gainText = juce::String(smoothedReadoutGainDb, 1);
         g.setColour(juce::Colour(0xFFB060FF));
     }
-    g.drawText(gainText, static_cast<int>(gainReadoutCenterX - 14), static_cast<int>(readoutArea.getY() + 2),
-               28, 14, juce::Justification::centred);
+    g.drawText(gainText, static_cast<int>(gainReadoutCenterX - 12), static_cast<int>(readoutArea.getY() + 1),
+               24, 12, juce::Justification::centred);
     
     g.restoreState();  // Restore from clip region
 }

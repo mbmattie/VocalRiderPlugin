@@ -835,6 +835,16 @@ public:
         closeButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFFA0A8B0));
         addAndMakeVisible(closeButton);
         closeButton.setVisible(false);
+        
+        // Documentation link button
+        docsButton.setButtonText("View Documentation");
+        docsButton.onClick = [] {
+            juce::URL("https://musicbymattie.com/magic-ride/docs").launchInDefaultBrowser();
+        };
+        docsButton.setColour(juce::TextButton::buttonColourId, CustomLookAndFeel::getAccentColour().withAlpha(0.3f));
+        docsButton.setColour(juce::TextButton::textColourOffId, CustomLookAndFeel::getAccentColour());
+        addAndMakeVisible(docsButton);
+        docsButton.setVisible(false);
     }
     
     ~AboutDialogPanel() override
@@ -852,16 +862,18 @@ public:
         targetOpacity = 0.98f;
         setVisible(true);
         closeButton.setVisible(true);
+        docsButton.setVisible(true);
         toFront(true);
         if (!isTimerRunning())
             startTimerHz(60);
-        resized();  // Position the close button
+        resized();  // Position buttons
     }
     
     void hide()
     {
         targetOpacity = 0.0f;
         closeButton.setVisible(false);
+        docsButton.setVisible(false);
     }
     
     bool isShowing() const { return targetOpacity > 0.5f || currentOpacity > 0.01f; }
@@ -871,7 +883,7 @@ public:
     {
         auto fullBounds = getLocalBounds().toFloat();
         float dialogWidth = 280.0f;
-        float dialogHeight = 200.0f;
+        float dialogHeight = 220.0f;  // Slightly taller for docs button
         dialogBounds = juce::Rectangle<float>(
             (fullBounds.getWidth() - dialogWidth) / 2.0f,
             (fullBounds.getHeight() - dialogHeight) / 2.0f,
@@ -884,6 +896,15 @@ public:
             static_cast<int>(dialogBounds.getRight()) - closeSize - 6,
             static_cast<int>(dialogBounds.getY()) + 6,
             closeSize, closeSize
+        );
+        
+        // Position docs button
+        int docsWidth = 140;
+        int docsHeight = 26;
+        docsButton.setBounds(
+            static_cast<int>(dialogBounds.getCentreX()) - docsWidth / 2,
+            static_cast<int>(dialogBounds.getBottom()) - docsHeight - 18,
+            docsWidth, docsHeight
         );
     }
     
@@ -944,9 +965,11 @@ public:
         // Help hint
         g.setColour(CustomLookAndFeel::getDimTextColour().withAlpha(0.7f * currentOpacity));
         g.setFont(CustomLookAndFeel::getPluginFont(9.0f, false));
-        g.drawText("Hover over any control for 3 seconds", dialogBounds.withY(y).withHeight(14.0f), juce::Justification::centredTop);
+        g.drawText("Hover over any control for 2.5 seconds", dialogBounds.withY(y).withHeight(14.0f), juce::Justification::centredTop);
         y += 13.0f;
         g.drawText("to see help information.", dialogBounds.withY(y).withHeight(14.0f), juce::Justification::centredTop);
+        
+        // Note: Documentation button is drawn as a child component (docsButton)
         
         // Bottom accent line
         g.setColour(CustomLookAndFeel::getAccentColour().withAlpha(0.35f * currentOpacity));
@@ -958,6 +981,7 @@ public:
     
 private:
     juce::TextButton closeButton;
+    juce::TextButton docsButton;
     juce::Rectangle<float> dialogBounds;
     
     void timerCallback() override
@@ -1799,10 +1823,10 @@ private:
     HelpButton helpButton;
     AboutDialogPanel aboutDialog;
     
-    // Hover-based help tooltip tracking (shows help after 3 seconds of hovering)
+    // Hover-based help tooltip tracking (shows help after 2.5 seconds of hovering)
     juce::Component* currentHoveredComponent = nullptr;
     int hoverTimeCounter = 0;  // Counts timer ticks while hovering
-    static constexpr int helpHoverDelayTicks = 90;  // 3 seconds at 30Hz timer
+    static constexpr int helpHoverDelayTicks = 75;  // 2.5 seconds at 30Hz timer
     
     // A/B Compare state storage
     struct ParameterState {

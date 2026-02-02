@@ -185,6 +185,11 @@ public:
         float attackMs;
         float releaseMs;
         float holdMs;
+        bool naturalMode;
+        bool smartSilence;
+        bool useLufs;
+        float breathReduction;      // 0-12 dB
+        float transientPreservation; // 0-100%
     };
     
     static const std::vector<Preset>& getFactoryPresets();

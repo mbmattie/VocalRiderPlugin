@@ -382,16 +382,23 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
         valueTooltip.hideTooltip();
     };
     
-    // Help button opens documentation in browser
-    helpButton.setClickingTogglesState(false);
-    helpButton.onClick = [] {
-        juce::URL("https://musicbymattie.com/magic-ride/docs").launchInDefaultBrowser();
+    // Help button opens About dialog with fade animation (toggle behavior)
+    helpButton.setClickingTogglesState(true);
+    helpButton.onClick = [this] {
+        if (helpButton.getToggleState())
+            aboutDialog.show();
+        else
+            aboutDialog.hide();
     };
     addAndMakeVisible(helpButton);
     
-    // Setup About dialog panel (initially hidden) - shown when clicking logo
+    // Setup About dialog panel (initially hidden)
     aboutDialog.setVersion(JucePlugin_VersionString);
     aboutDialog.setVisible(false);
+    aboutDialog.onClose = [this] {
+        // Sync button state when dialog is closed
+        helpButton.setToggleState(false, juce::dontSendNotification);
+    };
     addAndMakeVisible(aboutDialog);
     
     // Resize button callbacks are set up earlier where it's added to bottomBar
@@ -1299,33 +1306,18 @@ void VocalRiderAudioProcessorEditor::timerCallback()
             autoTargetButton.setToggleState(false, juce::dontSendNotification);
             autoTargetButton.setPulsing(false);
             
-            // Calculate and apply learned values - need at least 5 samples
+            // Calculate and apply learned target - need at least 5 samples
             if (learnSampleCount >= 5)
             {
                 float avgDb = learnSumDb / static_cast<float>(learnSampleCount);
-                float dynamicRange = learnMaxDb - learnMinDb;
-                
-                // Ensure we have a valid dynamic range
-                if (dynamicRange < 3.0f) dynamicRange = 6.0f;
                 
                 // Set target to average level (where vocal typically sits)
+                // Only adjusts target - leaves range and speed untouched
                 float targetLevel = juce::jlimit(-40.0f, -6.0f, avgDb);
                 if (auto* param = audioProcessor.getApvts().getParameter("targetLevel"))
                     param->setValueNotifyingHost(param->convertTo0to1(targetLevel));
-                
-                // Set range based on dynamic range (covers about 60% of measured range)
-                float range = juce::jlimit(3.0f, 15.0f, dynamicRange * 0.6f);
-                if (auto* param = audioProcessor.getApvts().getParameter("range"))
-                    param->setValueNotifyingHost(param->convertTo0to1(range));
-                
-                // Set speed based on dynamic range
-                // More dynamic = slower speed to be smoother, less pumpy
-                float speed = juce::jmap(dynamicRange, 6.0f, 24.0f, 60.0f, 30.0f);
-                speed = juce::jlimit(20.0f, 80.0f, speed);
-                if (auto* param = audioProcessor.getApvts().getParameter("speed"))
-                    param->setValueNotifyingHost(param->convertTo0to1(speed));
                     
-                // Also update the UI sliders immediately
+                // Update the UI
                 updateAdvancedControls();
             }
         }
@@ -1512,7 +1504,7 @@ juce::String VocalRiderAudioProcessorEditor::getHelpText(const juce::String& con
     if (controlName == "SPEED_BTN")
         return "Waveform scroll speed.\nSlower = see more history.";
     if (controlName == "AUTOTARGET")
-        return "Auto-analyze audio for 3 sec.\nSets target, range, and speed.";
+        return "Auto-analyze audio for 3 sec.\nSets target level only.";
     if (controlName == "INPUT_METER")
         return "Input level meter.\nShows your incoming signal level.";
     if (controlName == "OUTPUT_METER")
