@@ -95,7 +95,7 @@ echo "Resetting Audio Unit cache..."
 killall -9 AudioComponentRegistrar 2>/dev/null || true
 
 # Touch the plugin to update modification date
-touch "$HOME/Library/Audio/Plug-Ins/Components/magic.RIDE.component" 2>/dev/null || true
+touch "/Library/Audio/Plug-Ins/Components/magic.RIDE.component" 2>/dev/null || true
 
 exit 0
 EOF
@@ -104,19 +104,19 @@ chmod +x "$STAGING_DIR/scripts/postinstall"
 # Build component packages
 echo "Building component packages..."
 
-# AU Package (installs to user's Library)
+# AU Package (installs to system Library for better DAW compatibility)
 pkgbuild \
     --root "$STAGING_DIR/au" \
-    --install-location "$HOME/Library/Audio/Plug-Ins/Components" \
+    --install-location "/Library/Audio/Plug-Ins/Components" \
     --scripts "$STAGING_DIR/scripts" \
     --identifier "${IDENTIFIER}.au" \
     --version "$VERSION" \
     "$STAGING_DIR/au-component.pkg"
 
-# VST3 Package (installs to user's Library)
+# VST3 Package (installs to system Library for better DAW compatibility)
 pkgbuild \
     --root "$STAGING_DIR/vst3" \
-    --install-location "$HOME/Library/Audio/Plug-Ins/VST3" \
+    --install-location "/Library/Audio/Plug-Ins/VST3" \
     --identifier "${IDENTIFIER}.vst3" \
     --version "$VERSION" \
     "$STAGING_DIR/vst3-component.pkg"
@@ -127,7 +127,7 @@ cat > "$STAGING_DIR/distribution.xml" << EOF
 <installer-gui-script minSpecVersion="1">
     <title>${PLUGIN_NAME}</title>
     <organization>${IDENTIFIER}</organization>
-    <domains enable_localSystem="false" enable_currentUserHome="true"/>
+    <domains enable_localSystem="true" enable_currentUserHome="false"/>
     <options customize="never" require-scripts="false" rootVolumeOnly="false"/>
     
     <welcome file="welcome.html"/>
@@ -193,7 +193,7 @@ cat > "$STAGING_DIR/resources/welcome.html" << EOF
         <li>VST3 plugin</li>
     </ul>
     
-    <p>The plugins will be installed to your user Library folder, so no administrator password is required.</p>
+    <p>The plugins will be installed to the system Library folder for maximum DAW compatibility. An administrator password may be required.</p>
     
     <div class="note">
         <strong>After installation:</strong> Restart your DAW or rescan plugins to see magic.RIDE.
@@ -238,8 +238,8 @@ cat > "$STAGING_DIR/resources/conclusion.html" << EOF
     <p>magic.RIDE has been successfully installed.</p>
     
     <p><strong>Installation locations:</strong></p>
-    <div class="path">~/Library/Audio/Plug-Ins/Components/magic.RIDE.component</div>
-    <div class="path">~/Library/Audio/Plug-Ins/VST3/magic.RIDE.vst3</div>
+    <div class="path">/Library/Audio/Plug-Ins/Components/magic.RIDE.component</div>
+    <div class="path">/Library/Audio/Plug-Ins/VST3/magic.RIDE.vst3</div>
     
     <div class="tip">
         <strong>Next steps:</strong>

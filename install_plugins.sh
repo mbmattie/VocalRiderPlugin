@@ -14,7 +14,8 @@ VST3_SOURCE="${BUILD_DIR}/Release/VST3/magic.RIDE.vst3"
 
 # System plugin directories
 AU_DEST="${HOME}/Library/Audio/Plug-Ins/Components/magic.RIDE.component"
-VST3_DEST="${HOME}/Library/Audio/Plug-Ins/VST3/magic.RIDE.vst3"
+VST3_USER_DEST="${HOME}/Library/Audio/Plug-Ins/VST3/magic.RIDE.vst3"
+VST3_SYSTEM_DEST="/Library/Audio/Plug-Ins/VST3/magic.RIDE.vst3"
 
 echo ""
 echo "========================================"
@@ -45,9 +46,9 @@ if [ -d "${AU_DEST}" ]; then
     rm -rf "${AU_DEST}"
 fi
 
-if [ -d "${VST3_DEST}" ]; then
-    echo "Removing old VST3 plugin..."
-    rm -rf "${VST3_DEST}"
+if [ -d "${VST3_USER_DEST}" ]; then
+    echo "Removing old VST3 plugin (user)..."
+    rm -rf "${VST3_USER_DEST}"
 fi
 
 # Copy new plugins
@@ -55,9 +56,24 @@ echo "Installing AU plugin..."
 cp -R "${AU_SOURCE}" "${AU_DEST}"
 echo "  ✓ AU installed to ~/Library/Audio/Plug-Ins/Components/"
 
-echo "Installing VST3 plugin..."
-cp -R "${VST3_SOURCE}" "${VST3_DEST}"
+echo "Installing VST3 plugin (user location)..."
+cp -R "${VST3_SOURCE}" "${VST3_USER_DEST}"
 echo "  ✓ VST3 installed to ~/Library/Audio/Plug-Ins/VST3/"
+
+# System-level VST3 install (requires sudo, for better DAW compatibility)
+echo ""
+echo "Installing VST3 plugin (system location for better DAW compatibility)..."
+if [ -d "${VST3_SYSTEM_DEST}" ]; then
+    sudo rm -rf "${VST3_SYSTEM_DEST}" 2>/dev/null || {
+        echo "  ⚠ Could not remove old system VST3 (may need sudo)"
+    }
+fi
+if sudo cp -R "${VST3_SOURCE}" "${VST3_SYSTEM_DEST}" 2>/dev/null; then
+    echo "  ✓ VST3 installed to /Library/Audio/Plug-Ins/VST3/"
+else
+    echo "  ⚠ System VST3 install skipped (run script with sudo for full install)"
+    echo "    To manually install: sudo cp -R \"${VST3_SOURCE}\" \"${VST3_SYSTEM_DEST}\""
+fi
 
 # Reset Audio Unit cache (forces macOS to rescan)
 echo ""
