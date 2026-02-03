@@ -72,6 +72,16 @@ jobs:
     - name: Build
       run: cmake --build build --config Release --parallel
     
+    - name: List build artifacts
+      run: |
+        echo "Checking build output..."
+        dir build\VocalRider_artefacts\Release\VST3\ /s
+      shell: cmd
+    
+    - name: Create installer output directory
+      run: mkdir -p installer\output
+      shell: pwsh
+    
     - name: Build Windows Installer
       run: |
         & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\windows\magic.RIDE.iss
