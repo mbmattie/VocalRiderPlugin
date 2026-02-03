@@ -4,7 +4,7 @@
 #define MyAppName "magic.RIDE"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "MBM Audio"
-#define MyAppURL "https://github.com/yourusername/VocalRiderPlugin"
+#define MyAppURL "https://mbmaudio.com"
 
 [Setup]
 AppId={{8A7B5C3D-4E2F-1A0B-9C8D-7E6F5A4B3C2D}
