@@ -25,7 +25,7 @@ jobs:
     - name: Setup Xcode
       uses: maxim-lobanov/setup-xcode@v1
       with:
-        xcode-version: '15.1'  # Minimum required by JUCE
+        xcode-version: '15.2'  # Working version for JUCE compatibility
     
     - name: Import Code Signing Certificates
       env:
