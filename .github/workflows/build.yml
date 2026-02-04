@@ -14,7 +14,7 @@ env:
 
 jobs:
   build-macos:
-    runs-on: macos-13  # Use older macOS for better compatibility
+    runs-on: macos-14  # macOS 14 with older Xcode for compatibility
     
     steps:
     - name: Checkout repository
