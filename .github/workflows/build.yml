@@ -25,7 +25,7 @@ jobs:
     - name: Setup Xcode
       uses: maxim-lobanov/setup-xcode@v1
       with:
-        xcode-version: '14.3.1'  # Stable Xcode with macOS 13 SDK for max compatibility
+        xcode-version: '15.0.1'  # Oldest available on macos-14 runner
     
     - name: Import Code Signing Certificates
       env:
