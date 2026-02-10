@@ -28,12 +28,13 @@ public:
     {
         setAlwaysOnTop(true);
         setInterceptsMouseClicks(false, false);
-        startTimerHz(60);
+        // Timer started on-demand when animation is needed (not always-on)
     }
     
     void showValue(const juce::String& label, const juce::String& value, juce::Component* sourceComponent, bool showAbove = false, bool isHelpMode = false)
     {
-        if (label != currentLabel || value != currentValue || sourceComponent != currentSource)
+        bool contentChanged = (label != currentLabel || value != currentValue || sourceComponent != currentSource);
+        if (contentChanged)
         {
             currentLabel = label;
             currentValue = value;
@@ -47,6 +48,12 @@ public:
         setVisible(true);
         toFront(false);  // Bring tooltip to front
         updatePosition();  // Update position immediately
+        if (!isTimerRunning()) startTimerHz(60);  // Start animation timer on demand
+        
+        // Force repaint when content changes but tooltip is already fully visible
+        // (timer stops repainting once opacity animation completes)
+        if (contentChanged && currentOpacity >= 0.99f)
+            repaint();
     }
     
     // Helper to count lines in text
@@ -61,6 +68,7 @@ public:
         targetOpacity = 0.0f;
         fadeSpeed = helpMode ? 0.06f : 0.08f;  // Slightly slower fade for help mode
         hideDelayCounter = 0;
+        if (!isTimerRunning()) startTimerHz(60);  // Ensure timer runs for fade-out
     }
     
     void hideTooltipImmediate()
@@ -75,8 +83,8 @@ public:
         if (currentSource == nullptr || getParentComponent() == nullptr) return;
         
         // Calculate tooltip size based on content
-        int tooltipWidth = helpMode ? 160 : 58;  // Wider knob tooltips with more padding
-        int tooltipHeight = helpMode ? 52 : 32;  // Taller knob tooltips
+        int tooltipWidth = helpMode ? 170 : 68;  // Wider for larger text
+        int tooltipHeight = helpMode ? 56 : 36;  // Taller for larger text
         
         // Get source bounds relative to parent (works correctly with scaling transforms)
         auto sourceBounds = getParentComponent()->getLocalArea(currentSource, currentSource->getLocalBounds());
@@ -143,28 +151,28 @@ public:
         if (helpMode)
         {
             // Help mode: show label at top and help text below
-            auto labelBounds = bounds.removeFromTop(14.0f);
+            auto labelBounds = bounds.removeFromTop(16.0f);
             g.setColour(CustomLookAndFeel::getAccentColour().withAlpha(currentOpacity));
-            g.setFont(CustomLookAndFeel::getPluginFont(10.0f, true));
+            g.setFont(CustomLookAndFeel::getPluginFont(11.0f, true));
             g.drawText(currentLabel.toUpperCase(), labelBounds.reduced(4.0f, 0.0f), juce::Justification::centredLeft);
             
-            // Help text (smaller, wrapping)
+            // Help text (slightly larger, wrapping)
             g.setColour(CustomLookAndFeel::getTextColour().withAlpha(0.85f * currentOpacity));
-            g.setFont(CustomLookAndFeel::getPluginFont(9.0f, false));
+            g.setFont(CustomLookAndFeel::getPluginFont(10.0f, false));
             g.drawFittedText(currentValue, bounds.reduced(4.0f, 2.0f).toNearestInt(), 
                             juce::Justification::topLeft, 3);
         }
         else
         {
             // Normal mode: Label (top, bright grey, ALL CAPS)
-            auto labelBounds = bounds.removeFromTop(bounds.getHeight() * 0.45f);
+            auto labelBounds = bounds.removeFromTop(bounds.getHeight() * 0.42f);
             g.setColour(juce::Colour(0xFFB0B0B0).withAlpha(currentOpacity));  // Bright grey
-            g.setFont(CustomLookAndFeel::getPluginFont(9.0f, true));
+            g.setFont(CustomLookAndFeel::getPluginFont(10.0f, true));
             g.drawText(currentLabel.toUpperCase(), labelBounds, juce::Justification::centred);
             
-            // Value (bottom, white for emphasis)
+            // Value (bottom, white for emphasis) - LARGER for readability
             g.setColour(juce::Colours::white.withAlpha(currentOpacity));
-            g.setFont(CustomLookAndFeel::getPluginFont(11.0f, true));
+            g.setFont(CustomLookAndFeel::getPluginFont(13.0f, true));
             g.drawText(currentValue, bounds, juce::Justification::centred);
         }
     }
@@ -202,12 +210,22 @@ private:
         {
             currentOpacity = targetOpacity;
             repaint();
+            if (currentOpacity < 0.01f)
+            {
+                setVisible(false);
+                stopTimer();  // Stop timer when fully hidden
+            }
+        }
+        else
+        {
+            // Animation complete - stop polling
+            stopTimer();
         }
     }
     
     juce::String currentLabel;
     juce::String currentValue;
-    juce::Component* currentSource = nullptr;
+    juce::Component::SafePointer<juce::Component> currentSource;  // SafePointer prevents dangling
     float currentOpacity = 0.0f;
     float targetOpacity = 0.0f;
     float fadeSpeed = 0.15f;
@@ -223,12 +241,13 @@ public:
     {
         setOpaque(false);  // Not opaque during fade
         setInterceptsMouseClicks(false, false);  // Don't intercept clicks - let buttons through
-        startTimerHz(60);
+        // Timer started on-demand when animation is needed
     }
     
     void setTargetOpacity(float opacity)
     {
         targetOpacity = opacity;
+        if (!isTimerRunning()) startTimerHz(60);  // Start timer for animation
     }
     
     float getCurrentOpacity() const { return currentOpacity; }
@@ -301,6 +320,11 @@ private:
             currentOpacity = targetOpacity;
             if (onAnimationUpdate)
                 onAnimationUpdate();
+            stopTimer();  // Animation complete
+        }
+        else
+        {
+            stopTimer();  // No change needed
         }
     }
     
@@ -363,7 +387,7 @@ public:
         auto bounds = getLocalBounds().toFloat().reduced(2.0f);
         
         // Calculate colors based on gain - smooth interpolation
-        float normalizedGain = juce::jlimit(-1.0f, 1.0f, currentGainDb / rangeDb);
+        float normalizedGain = (rangeDb > 0.001f) ? juce::jlimit(-1.0f, 1.0f, currentGainDb / rangeDb) : 0.0f;
         
         juce::Colour boostColour(0xFF5BCEFA);   // Bright cyan
         juce::Colour neutralColour = CustomLookAndFeel::getTextColour().withAlpha(0.6f);
@@ -631,7 +655,8 @@ public:
         
         if (iconDrawable != nullptr)
         {
-            iconDrawable->replaceColour(juce::Colours::black, iconColour);
+            iconDrawable->replaceColour(lastIconColour, iconColour);
+            lastIconColour = iconColour;
             iconDrawable->drawWithin(g, bounds, juce::RectanglePlacement::centred, 1.0f);
         }
     }
@@ -645,6 +670,7 @@ public:
     }
     
     std::unique_ptr<juce::Drawable> iconDrawable;
+    juce::Colour lastIconColour { juce::Colours::black };
     
     void clicked() override
     {
@@ -654,14 +680,17 @@ public:
         menu.addItem(2, "Medium", true, currentSize == 1);
         menu.addItem(3, "Large", true, currentSize == 2);
         
+        // Use SafePointer to avoid dangling 'this' if editor closes while menu is open
+        juce::Component::SafePointer<ResizeButton> safeThis(this);
         menu.showMenuAsync(juce::PopupMenu::Options()
             .withTargetComponent(this)
             .withMinimumWidth(80),
-            [this](int result) {
-                if (result >= 1 && result <= 3 && onSizeSelected)
+            [safeThis](int result) {
+                if (safeThis == nullptr) return;
+                if (result >= 1 && result <= 3 && safeThis->onSizeSelected)
                 {
-                    currentSize = result - 1;
-                    onSizeSelected(result - 1);
+                    safeThis->currentSize = result - 1;
+                    safeThis->onSizeSelected(result - 1);
                 }
             });
     }
@@ -725,15 +754,15 @@ public:
         
         if (iconDrawable != nullptr)
         {
-            // Create a copy and set its color to avoid caching issues
-            auto drawableCopy = iconDrawable->createCopy();
-            drawableCopy->replaceColour(juce::Colours::black, iconColour);
-            drawableCopy->drawWithin(g, bounds, juce::RectanglePlacement::centred, 1.0f);
+            iconDrawable->replaceColour(lastIconColour, iconColour);
+            lastIconColour = iconColour;
+            iconDrawable->drawWithin(g, bounds, juce::RectanglePlacement::centred, 1.0f);
         }
     }
     
 private:
     std::unique_ptr<juce::Drawable> iconDrawable;
+    juce::Colour lastIconColour { juce::Colours::black };
 };
 
 //==============================================================================
@@ -822,13 +851,16 @@ public:
     AboutDialogPanel()
     {
         setOpaque(false);
-        setInterceptsMouseClicks(false, true);  // Allow child button clicks
+        setInterceptsMouseClicks(false, false);  // Start non-blocking; enabled when shown
         
         // Add actual close button (more reliable than mouseDown in AU hosts)
         closeButton.setButtonText(juce::CharPointer_UTF8("\xc3\x97"));  // × symbol
         closeButton.onClick = [this] {
             hide();
-            setVisible(false);
+            // Don't call setVisible(false) here - let the fade animation and timer
+            // handle it cleanly. Calling setVisible(false) mid-fade can leave the
+            // component in an inconsistent state where isShowing() returns false
+            // but the hit-test chain is disrupted.
             if (onClose) onClose();
         };
         closeButton.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
@@ -861,6 +893,7 @@ public:
     {
         targetOpacity = 0.98f;
         setVisible(true);
+        setInterceptsMouseClicks(true, true);  // Block clicks behind dialog
         closeButton.setVisible(true);
         docsButton.setVisible(true);
         toFront(true);
@@ -874,6 +907,12 @@ public:
         targetOpacity = 0.0f;
         closeButton.setVisible(false);
         docsButton.setVisible(false);
+        setInterceptsMouseClicks(false, false);  // Allow clicks through while fading
+        
+        // Ensure timer is running so the fade-out animation completes
+        // and cleanup (setVisible(false), stopTimer) happens properly
+        if (!isTimerRunning())
+            startTimerHz(60);
     }
     
     bool isShowing() const { return targetOpacity > 0.5f || currentOpacity > 0.01f; }
@@ -965,9 +1004,9 @@ public:
         // Help hint
         g.setColour(CustomLookAndFeel::getDimTextColour().withAlpha(0.7f * currentOpacity));
         g.setFont(CustomLookAndFeel::getPluginFont(9.0f, false));
-        g.drawText("Hover over any control for 2.5 seconds", dialogBounds.withY(y).withHeight(14.0f), juce::Justification::centredTop);
+        g.drawText("Hover over any control to see", dialogBounds.withY(y).withHeight(14.0f), juce::Justification::centredTop);
         y += 13.0f;
-        g.drawText("to see help information.", dialogBounds.withY(y).withHeight(14.0f), juce::Justification::centredTop);
+        g.drawText("help info in the status bar.", dialogBounds.withY(y).withHeight(14.0f), juce::Justification::centredTop);
         
         // Note: Documentation button is drawn as a child component (docsButton)
         
@@ -976,6 +1015,16 @@ public:
         g.fillRoundedRectangle(dialogBounds.getX() + 40.0f, dialogBounds.getBottom() - 5.0f,
                                dialogBounds.getWidth() - 80.0f, 2.0f, 1.0f);
     }
+    
+    // Only participate in hit-testing when the dialog is actually visible/showing
+    bool hitTest(int, int) override
+    {
+        return targetOpacity > 0.5f && currentOpacity > 0.01f;
+    }
+    
+    // Consume all mouse clicks on the overlay so nothing behind is clickable
+    void mouseDown(const juce::MouseEvent&) override {}
+    void mouseUp(const juce::MouseEvent&) override {}
     
     std::function<void()> onClose;
     
@@ -996,6 +1045,7 @@ private:
         else if (currentOpacity < 0.01f && targetOpacity < 0.01f)
         {
             setVisible(false);
+            setInterceptsMouseClicks(false, false);  // Ensure clicks pass through
             closeButton.setVisible(false);
             stopTimer();  // Stop timer when fully hidden
         }
@@ -1019,6 +1069,7 @@ class HelpButton : public juce::Button
 {
 public:
     HelpButton() : juce::Button("Help") { setClickingTogglesState(true); }
+    
     
     void paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool /*shouldDrawButtonAsDown*/) override
     {
@@ -1106,13 +1157,15 @@ public:
         
         if (iconDrawable != nullptr)
         {
-            iconDrawable->replaceColour(juce::Colours::black, col);
+            iconDrawable->replaceColour(lastIconColour, col);
+            lastIconColour = col;
             iconDrawable->drawWithin(g, bounds, juce::RectanglePlacement::centred, 1.0f);
         }
     }
     
 private:
     std::unique_ptr<juce::Drawable> iconDrawable;
+    juce::Colour lastIconColour { juce::Colours::black };
 };
 
 //==============================================================================
@@ -1132,17 +1185,21 @@ public:
     {
         auto bounds = getLocalBounds().toFloat().reduced(3.0f);
         
-        juce::Colour col = shouldDrawButtonAsHighlighted ? CustomLookAndFeel::getTextColour() : CustomLookAndFeel::getDimTextColour();
+        juce::Colour iconColour = shouldDrawButtonAsHighlighted 
+            ? CustomLookAndFeel::getAccentColour() 
+            : CustomLookAndFeel::getDimTextColour();
         
         if (iconDrawable != nullptr)
         {
-            iconDrawable->replaceColour(juce::Colours::black, col);
+            iconDrawable->replaceColour(lastIconColour, iconColour);
+            lastIconColour = iconColour;
             iconDrawable->drawWithin(g, bounds, juce::RectanglePlacement::centred, 1.0f);
         }
     }
     
 private:
     std::unique_ptr<juce::Drawable> iconDrawable;
+    juce::Colour lastIconColour { juce::Colours::black };
 };
 
 //==============================================================================
@@ -1157,6 +1214,21 @@ public:
     {
         setClickingTogglesState(type != Speed);  // Speed doesn't toggle, Auto does toggle
         startTimerHz(60);  // Higher framerate for smooth pulsing
+        
+        // Cache SVG drawable once (parsing XML every paint is expensive)
+        const char* svgData = nullptr;
+        switch (type)
+        {
+            case Natural:  svgData = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#000000" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M5 21c.5-4.5 2.5-8 7-10"/><path d="M9 18c6.218 0 10.5-3.288 11-12V4h-4.014c-9 0-11.986 4-12 9c0 1 0 3 2 5h3z"/></g></svg>)"; break;
+            case Silence:  svgData = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><path fill="#000000" fill-rule="evenodd" d="m25.856 160.231l-.105 15.5l21.52.091s10.258.899 17.47-1.033c7.21-1.932 5.846.283 11.266-6.664s2.59-5.662 5.685-15.063s5.482-18.859 5.482-18.859l5.383-19.944l6.906-17.103l4.976-5.127l11.477-.617l16.25.1l18.06-.211l6.094.464l5.18 7.82l4.468 14.117l4.062 14.727l4.04 14.208l4.367 14.726s2.14 7.77 6.398 11.62c4.257 3.851 13.406 6.293 13.406 6.293l20.313.3l13.651-.105l.502-15.884l-16.709.405l-17.022-.72l-2.563-.717l-5.742-17.059l-6.713-23.695l-5.777-19.032s-1.753-7.91-6.973-13.517s-8.141-8.08-15.059-10.146s-10.042-.902-21.245-.803c-11.202.099-17.124.015-22.405.19c-5.281.174-10.457.896-10.457.896l-9.33 3.96l-8.1 11.07l-5.023 12.188l-5.23 18.891l-3.999 14.727l-4.511 13.608l-3.282 9.445l-17.84.793l-18.87.16z"/></svg>)"; break;
+            case Speed:    svgData = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#000000" d="m20.38 8.57l-1.23 1.85a8 8 0 0 1-.22 7.58H5.07A8 8 0 0 1 15.58 6.85l1.85-1.23A10 10 0 0 0 3.35 19a2 2 0 0 0 1.72 1h13.85a2 2 0 0 0 1.74-1a10 10 0 0 0-.27-10.44z"/><path fill="#000000" d="M10.59 15.41a2 2 0 0 0 2.83 0l5.66-8.49l-8.49 5.66a2 2 0 0 0 0 2.83"/></svg>)"; break;
+            case Auto:     svgData = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#000000" d="m19 9l-1.25-2.75L15 5l2.75-1.25L19 1l1.25 2.75L23 5l-2.75 1.25Zm0 14l-1.25-2.75L15 19l2.75-1.25L19 15l1.25 2.75L23 19l-2.75 1.25ZM4.8 16L8 7h2l3.2 9h-1.9l-.7-2H7.4l-.7 2Zm3.05-3.35h2.3L9 9ZM9 18q2.5 0 4.25-1.75T15 12q0-2.5-1.75-4.25T9 6Q6.5 6 4.75 7.75T3 12q0 2.5 1.75 4.25T9 18Zm0 2q-3.35 0-5.675-2.325Q1 15.35 1 12q0-3.35 2.325-5.675Q5.65 4 9 4q3.35 0 5.675 2.325Q17 8.65 17 12q0 3.35-2.325 5.675Q12.35 20 9 20Z"/></svg>)"; break;
+        }
+        if (svgData != nullptr)
+        {
+            if (auto xml = juce::XmlDocument::parse(svgData))
+                cachedIcon = juce::Drawable::createFromSVG(*xml);
+        }
     }
     
     // Update the displayed label text
@@ -1189,44 +1261,7 @@ public:
                                        : (shouldDrawButtonAsHighlighted ? CustomLookAndFeel::getTextColour() 
                                                                         : CustomLookAndFeel::getDimTextColour());
         
-        // Draw SVG icon based on type
-        std::unique_ptr<juce::Drawable> iconDrawable;
-        
-        switch (iconType)
-        {
-            case Natural:
-            {
-                // Leaf icon SVG - replaced currentColor with #000000 for color replacement
-                const char* leafSVG = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#000000" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M5 21c.5-4.5 2.5-8 7-10"/><path d="M9 18c6.218 0 10.5-3.288 11-12V4h-4.014c-9 0-11.986 4-12 9c0 1 0 3 2 5h3z"/></g></svg>)";
-                if (auto xml = juce::XmlDocument::parse(leafSVG))
-                    iconDrawable = juce::Drawable::createFromSVG(*xml);
-                break;
-            }
-            case Silence:
-            {
-                // Speaker icon SVG (will be flipped upside down when drawing) - replaced currentColor with #000000
-                const char* speakerSVG = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><path fill="#000000" fill-rule="evenodd" d="m25.856 160.231l-.105 15.5l21.52.091s10.258.899 17.47-1.033c7.21-1.932 5.846.283 11.266-6.664s2.59-5.662 5.685-15.063s5.482-18.859 5.482-18.859l5.383-19.944l6.906-17.103l4.976-5.127l11.477-.617l16.25.1l18.06-.211l6.094.464l5.18 7.82l4.468 14.117l4.062 14.727l4.04 14.208l4.367 14.726s2.14 7.77 6.398 11.62c4.257 3.851 13.406 6.293 13.406 6.293l20.313.3l13.651-.105l.502-15.884l-16.709.405l-17.022-.72l-2.563-.717l-5.742-17.059l-6.713-23.695l-5.777-19.032s-1.753-7.91-6.973-13.517s-8.141-8.08-15.059-10.146s-10.042-.902-21.245-.803c-11.202.099-17.124.015-22.405.19c-5.281.174-10.457.896-10.457.896l-9.33 3.96l-8.1 11.07l-5.023 12.188l-5.23 18.891l-3.999 14.727l-4.511 13.608l-3.282 9.445l-17.84.793l-18.87.16z"/></svg>)";
-                if (auto xml = juce::XmlDocument::parse(speakerSVG))
-                    iconDrawable = juce::Drawable::createFromSVG(*xml);
-                break;
-            }
-            case Speed:
-            {
-                // Speed/refresh icon SVG - replaced currentColor with #000000
-                const char* speedSVG = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#000000" d="m20.38 8.57l-1.23 1.85a8 8 0 0 1-.22 7.58H5.07A8 8 0 0 1 15.58 6.85l1.85-1.23A10 10 0 0 0 3.35 19a2 2 0 0 0 1.72 1h13.85a2 2 0 0 0 1.74-1a10 10 0 0 0-.27-10.44z"/><path fill="#000000" d="M10.59 15.41a2 2 0 0 0 2.83 0l5.66-8.49l-8.49 5.66a2 2 0 0 0 0 2.83"/></svg>)";
-                if (auto xml = juce::XmlDocument::parse(speedSVG))
-                    iconDrawable = juce::Drawable::createFromSVG(*xml);
-                break;
-            }
-            case Auto:
-            {
-                // Auto icon SVG - replaced currentColor with #000000 for color replacement
-                const char* autoSVG = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#000000" d="m19 9l-1.25-2.75L15 5l2.75-1.25L19 1l1.25 2.75L23 5l-2.75 1.25Zm0 14l-1.25-2.75L15 19l2.75-1.25L19 15l1.25 2.75L23 19l-2.75 1.25ZM4.8 16L8 7h2l3.2 9h-1.9l-.7-2H7.4l-.7 2Zm3.05-3.35h2.3L9 9ZM9 18q2.5 0 4.25-1.75T15 12q0-2.5-1.75-4.25T9 6Q6.5 6 4.75 7.75T3 12q0 2.5 1.75 4.25T9 18Zm0 2q-3.35 0-5.675-2.325Q1 15.35 1 12q0-3.35 2.325-5.675Q5.65 4 9 4q3.35 0 5.675 2.325Q17 8.65 17 12q0 3.35-2.325 5.675Q12.35 20 9 20Z"/></svg>)";
-                if (auto xml = juce::XmlDocument::parse(autoSVG))
-                    iconDrawable = juce::Drawable::createFromSVG(*xml);
-                break;
-            }
-        }
+        // Use cached SVG icon (parsed once in constructor, not every paint)
         
         // === Always center icon + text together, no movement ===
         auto fullBounds = getLocalBounds().toFloat().reduced(1.0f);
@@ -1264,9 +1299,10 @@ public:
         // Icon area (centered with text)
         auto centeredIconArea = juce::Rectangle<float>(startX, fullBounds.getCentreY() - iconSize / 2.0f, iconSize, iconSize);
         
-        if (iconDrawable != nullptr)
+        if (cachedIcon != nullptr)
         {
-            iconDrawable->replaceColour(juce::Colours::black, iconColour);
+            cachedIcon->replaceColour(lastIconColour, iconColour);
+            lastIconColour = iconColour;
             
             // Flip speaker icon upside down
             if (iconType == Silence)
@@ -1275,12 +1311,12 @@ public:
                 float cy = centeredIconArea.getCentreY();
                 auto transform = juce::AffineTransform::verticalFlip(cy * 2.0f);
                 g.addTransform(transform);
-                iconDrawable->drawWithin(g, centeredIconArea, juce::RectanglePlacement::centred, 1.0f);
+                cachedIcon->drawWithin(g, centeredIconArea, juce::RectanglePlacement::centred, 1.0f);
                 g.restoreState();
             }
             else
             {
-                iconDrawable->drawWithin(g, centeredIconArea, juce::RectanglePlacement::centred, 1.0f);
+                cachedIcon->drawWithin(g, centeredIconArea, juce::RectanglePlacement::centred, 1.0f);
             }
         }
         
@@ -1325,6 +1361,8 @@ private:
     
     juce::String buttonLabel;
     IconType iconType;
+    std::unique_ptr<juce::Drawable> cachedIcon;  // Parsed once, not every paint
+    juce::Colour lastIconColour { juce::Colours::black };
     float glowAmount = 0.0f;
     float pulseAmount = 0.0f;
     float pulsePhase = 0.0f;
@@ -1513,13 +1551,15 @@ public:
         
         if (iconDrawable != nullptr)
         {
-            iconDrawable->replaceColour(juce::Colours::black, iconColour);
+            iconDrawable->replaceColour(lastIconColour, iconColour);
+            lastIconColour = iconColour;
             iconDrawable->drawWithin(g, bounds, juce::RectanglePlacement::centred, 1.0f);
         }
     }
     
 private:
     std::unique_ptr<juce::Drawable> iconDrawable;
+    juce::Colour lastIconColour { juce::Colours::black };
 };
 
 //==============================================================================
@@ -1749,6 +1789,7 @@ public:
     void resized() override;
     void timerCallback() override;
     bool keyPressed(const juce::KeyPress& key) override;
+    
 
 private:
     // Window size presets (FabFilter-style)
@@ -1833,10 +1874,15 @@ private:
     HelpButton helpButton;
     AboutDialogPanel aboutDialog;
     
-    // Hover-based help tooltip tracking (shows help after 2.5 seconds of hovering)
+    // Hover-based status bar help (FabFilter-style bottom bar descriptions)
     juce::Component* currentHoveredComponent = nullptr;
-    int hoverTimeCounter = 0;  // Counts timer ticks while hovering
-    static constexpr int helpHoverDelayTicks = 75;  // 2.5 seconds at 30Hz timer
+    juce::String versionString;  // Cached version text
+    void setStatusBarText(const juce::String& text);
+    void clearStatusBarText();
+    juce::String getShortHelpText(const juce::String& controlName);
+    
+    // Phrase indicator silence counter (UI-level timeout for natural mode indicator)
+    int phraseIndicatorSilenceCount = 0;
     
     // A/B Compare state storage
     struct ParameterState {
@@ -1849,6 +1895,7 @@ private:
         float breathReduction = 0.0f;
         float transientPreservation = 50.0f;
         float outputTrim = 0.0f;
+        float noiseFloor = -60.0f;
     };
     ParameterState stateA;
     ParameterState stateB;
@@ -1866,6 +1913,15 @@ private:
     // Help descriptions for each control
     juce::String getHelpText(const juce::String& controlName);
     
+    // User preset system
+    std::vector<VocalRiderAudioProcessor::Preset> cachedUserPresets;
+    void rebuildPresetMenu();
+    void showSavePresetDialog();
+    std::vector<int> getNavigablePresetIds() const;
+    
+    // Owned save dialog overlay (prevents leak if editor destroyed while dialog open)
+    std::unique_ptr<juce::Component> saveDialogOverlay;
+    
     // Learn button for auto-analysis (with pulsing animation)
     LearnButton learnButton;
     int learnCountdown = 0;
@@ -1878,6 +1934,9 @@ private:
     
     // Displayed gain (decays to zero when no audio)
     float displayedGainDb = 0.0f;
+    
+    // Cached noise texture (regenerated only on resize, not every paint)
+    juce::Image cachedNoiseTexture;
     
     // Parameter attachments
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> targetAttachment;
@@ -1893,6 +1952,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> naturalModeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> smartSilenceAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputTrimAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> noiseFloorAttachment;
 
     //==============================================================================
     // Advanced panel (slide-down from top)
@@ -1908,8 +1968,9 @@ private:
     TooltipSlider holdSlider;
     TooltipSlider breathReductionSlider;
     TooltipSlider transientPreservationSlider;
+    TooltipSlider noiseFloorSlider;
     
-    // Output Trim - adjustable MiniGainMeter-style fader
+    // Output Trim - FabFilter-style vertical fader with pill handle and purple glow
     class AdjustableGainMeter : public juce::Component
     {
     public:
@@ -1929,57 +1990,146 @@ private:
         
         void paint(juce::Graphics& g) override
         {
-            auto bounds = getLocalBounds().toFloat().reduced(1.0f);
+            auto bounds = getLocalBounds().toFloat();
             
-            // Background
-            g.setColour(CustomLookAndFeel::getSurfaceDarkColour());
-            g.fillRoundedRectangle(bounds, 3.0f);
+            // Inset the drawing area so the handle never clips at the edges
+            float handleOverhang = 4.0f;  // How much handle extends past bounds
+            auto drawArea = bounds.reduced(handleOverhang, 0.0f);
             
-            // Border
-            g.setColour(CustomLookAndFeel::getBorderColour().withAlpha(0.5f));
-            g.drawRoundedRectangle(bounds, 3.0f, 0.5f);
+            float trackWidth = juce::jmin(drawArea.getWidth(), 7.0f);
+            float trackX = drawArea.getCentreX() - trackWidth / 2.0f;
+            float trackPadding = 12.0f;  // Room for handle overshoot top/bottom
+            float trackY = drawArea.getY() + trackPadding;
+            float trackHeight = drawArea.getHeight() - trackPadding * 2.0f;
+            auto trackBounds = juce::Rectangle<float>(trackX, trackY, trackWidth, trackHeight);
             
-            // Center line (0 dB)
-            float centerY = bounds.getCentreY();
-            g.setColour(CustomLookAndFeel::getDimTextColour().withAlpha(0.3f));
-            g.fillRect(bounds.getX() + 2.0f, centerY - 0.5f, bounds.getWidth() - 4.0f, 1.0f);
+            // === TRACK BACKGROUND (dark recessed groove) ===
+            g.setColour(juce::Colour(0xFF0F1114));  // Very dark
+            g.fillRoundedRectangle(trackBounds, trackWidth / 2.0f);
             
-            // Value bar (similar to MiniGainMeter)
+            // Subtle inset shadow
+            g.setColour(juce::Colour(0x30000000));
+            g.drawRoundedRectangle(trackBounds, trackWidth / 2.0f, 1.0f);
+            
+            // === CENTER TICK (0 dB reference) ===
+            float centerY = trackBounds.getCentreY();
+            g.setColour(juce::Colour(0xFF4A4F58));
+            g.fillRect(trackX - 2.0f, centerY - 0.5f, trackWidth + 4.0f, 1.0f);
+            
+            // === HANDLE POSITION ===
             float normalizedValue = currentValueDb / 12.0f;  // -1 to +1
-            float barHeight = std::abs(normalizedValue) * (bounds.getHeight() / 2.0f - 2.0f);
+            float handleY = centerY - normalizedValue * (trackHeight / 2.0f - 2.0f);
             
-            if (currentValueDb > 0.1f)
+            // === PURPLE GLOW FILL from center (only when not at 0 dB) ===
+            if (std::abs(currentValueDb) > 0.2f)
             {
-                // Positive - draw upward from center (softer cyan-blue matching main meter)
-                g.setColour(juce::Colour(0xFF60B8D0).withAlpha(0.85f));  // Desaturated cyan-blue
-                g.fillRoundedRectangle(bounds.getX() + 2.0f, centerY - barHeight, 
-                                        bounds.getWidth() - 4.0f, barHeight, 2.0f);
+                float fillTop = juce::jmin(centerY, handleY);
+                float fillBottom = juce::jmax(centerY, handleY);
+                float fillHeight = fillBottom - fillTop;
+                
+                auto fillBounds = juce::Rectangle<float>(trackX + 1.0f, fillTop, trackWidth - 2.0f, fillHeight);
+                
+                // Purple gradient fill (matches the other knob accents)
+                juce::ColourGradient fillGrad;
+                if (currentValueDb > 0)
+                {
+                    // Boost: bright purple at top (handle end), dimmer at center
+                    fillGrad = juce::ColourGradient(
+                        juce::Colour(0xFFB070E0), fillBounds.getCentreX(), fillBounds.getY(),
+                        juce::Colour(0xFF7050A0), fillBounds.getCentreX(), fillBounds.getBottom(),
+                        false
+                    );
+                }
+                else
+                {
+                    // Cut: bright purple at bottom (handle end), dimmer at center
+                    fillGrad = juce::ColourGradient(
+                        juce::Colour(0xFF7050A0), fillBounds.getCentreX(), fillBounds.getY(),
+                        juce::Colour(0xFFB070E0), fillBounds.getCentreX(), fillBounds.getBottom(),
+                        false
+                    );
+                }
+                g.setGradientFill(fillGrad);
+                g.fillRoundedRectangle(fillBounds, (trackWidth - 2.0f) / 2.0f);
+                
+                // Outer glow on track
+                g.setColour(juce::Colour(0xFFB070E0).withAlpha(0.12f));
+                float glowExpand = 2.0f;
+                g.fillRoundedRectangle(fillBounds.expanded(glowExpand, 0.0f), 
+                                        (trackWidth - 2.0f) / 2.0f + glowExpand);
             }
-            else if (currentValueDb < -0.1f)
-            {
-                // Negative - draw downward from center (softer purple matching main meter)
-                g.setColour(juce::Colour(0xFF9070B8).withAlpha(0.85f));  // Desaturated purple
-                g.fillRoundedRectangle(bounds.getX() + 2.0f, centerY,
-                                        bounds.getWidth() - 4.0f, barHeight, 2.0f);
-            }
+            
+            // === WIDE HORIZONTAL PILL HANDLE ===
+            // Keep handle within the full bounds (not the reduced drawArea) so it extends nicely
+            float handleWidth = bounds.getWidth() - 2.0f;  // Slightly inset from component edges
+            float handleHeight = 12.0f;  // Capsule height
+            float handleRadius = handleHeight / 2.0f;  // Fully rounded ends
+            float handleX = bounds.getCentreX() - handleWidth / 2.0f;
+            handleY = juce::jlimit(trackY, trackY + trackHeight - handleHeight, handleY - handleHeight / 2.0f);
+            auto handleBounds = juce::Rectangle<float>(handleX, handleY, handleWidth, handleHeight);
+            
+            // Handle shadow
+            g.setColour(juce::Colour(0x40000000));
+            g.fillRoundedRectangle(handleBounds.translated(0.0f, 1.5f), handleRadius);
+            
+            // Handle body (dark gray with subtle glass effect)
+            juce::ColourGradient handleGrad(
+                juce::Colour(0xFF555B65), handleBounds.getCentreX(), handleBounds.getY(),
+                juce::Colour(0xFF2A2D35), handleBounds.getCentreX(), handleBounds.getBottom(),
+                false
+            );
+            g.setGradientFill(handleGrad);
+            g.fillRoundedRectangle(handleBounds, handleRadius);
+            
+            // Glass highlight on top half
+            auto topHalf = handleBounds.withHeight(handleHeight / 2.0f);
+            g.setColour(juce::Colour(0x18FFFFFF));
+            g.fillRoundedRectangle(topHalf, handleRadius);
+            
+            // Handle border
+            g.setColour(juce::Colour(0xFF5A5F68));
+            g.drawRoundedRectangle(handleBounds, handleRadius, 0.8f);
+            
+            // Single white center line
+            g.setColour(juce::Colour(0xCCFFFFFF));
+            float lineWidth = handleWidth * 0.3f;
+            float lineCenterX = handleBounds.getCentreX();
+            float lineCenterY = handleBounds.getCentreY();
+            g.drawLine(lineCenterX - lineWidth / 2.0f, lineCenterY,
+                       lineCenterX + lineWidth / 2.0f, lineCenterY, 1.0f);
         }
         
         void mouseDown(const juce::MouseEvent& e) override
         {
+            // Option/Alt-click resets to 0 dB
+            if (e.mods.isAltDown())
+            {
+                currentValueDb = 0.0f;
+                repaint();
+                if (onValueChanged)
+                    onValueChanged(currentValueDb);
+                return;
+            }
+            isDragging = true;
             mouseDrag(e);
         }
         
         void mouseDrag(const juce::MouseEvent& e) override
         {
-            auto bounds = getLocalBounds().toFloat();
+            float trackPadding = 8.0f;
+            float trackHeight = static_cast<float>(getHeight()) - trackPadding * 2.0f;
+            float centerY = trackPadding + trackHeight / 2.0f;
+            
             float y = static_cast<float>(e.y);
-            float normalized = 1.0f - (y / bounds.getHeight());  // 0 at bottom, 1 at top
-            normalized = juce::jlimit(0.0f, 1.0f, normalized);
+            // Map y position to dB: center = 0, top = +12, bottom = -12
+            float normalized = (centerY - y) / (trackHeight / 2.0f);
+            float newValue = juce::jlimit(-12.0f, 12.0f, normalized * 12.0f);
             
-            // Map to -12 to +12 dB (center at 0.5 = 0 dB)
-            float newValue = (normalized - 0.5f) * 24.0f;  // -12 to +12
+            // Snap to 0 when close
+            if (std::abs(newValue) < 0.5f)
+                newValue = 0.0f;
             
-            if (std::abs(newValue - currentValueDb) > 0.1f)
+            if (std::abs(newValue - currentValueDb) > 0.05f)
             {
                 currentValueDb = newValue;
                 repaint();
@@ -1988,10 +2138,24 @@ private:
             }
         }
         
+        void mouseUp(const juce::MouseEvent&) override
+        {
+            isDragging = false;
+        }
+        
+        void mouseDoubleClick(const juce::MouseEvent&) override
+        {
+            // Double-click resets to 0 dB
+            currentValueDb = 0.0f;
+            repaint();
+            if (onValueChanged)
+                onValueChanged(currentValueDb);
+        }
+        
         void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override
         {
-            float delta = wheel.deltaY * 2.0f;  // Adjust sensitivity
-            float newValue = juce::jlimit(-12.0f, 12.0f, currentValueDb - delta);
+            float delta = wheel.deltaY * 2.0f;
+            float newValue = juce::jlimit(-12.0f, 12.0f, currentValueDb + delta);
             if (std::abs(newValue - currentValueDb) > 0.05f)
             {
                 currentValueDb = newValue;
@@ -2013,6 +2177,7 @@ private:
         
     private:
         float currentValueDb = 0.0f;
+        bool isDragging = false;
     };
     
     AdjustableGainMeter outputTrimMeter;
@@ -2023,6 +2188,7 @@ private:
     juce::Label holdLabel;
     juce::Label breathLabel;
     juce::Label transientLabel;
+    juce::Label noiseFloorLabel;
     juce::Label outputTrimLabel;
     
     // Output trim range labels (around the meter)

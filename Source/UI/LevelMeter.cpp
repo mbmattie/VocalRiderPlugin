@@ -127,7 +127,7 @@ void LevelMeter::resized() {}
 
 void LevelMeter::setLevel(float levelDb)
 {
-    currentLevelDb = levelDb;
+    currentLevelDb.store(levelDb);
 }
 
 void LevelMeter::setRange(float newMinDb, float newMaxDb)
@@ -150,7 +150,7 @@ void LevelMeter::setPeakHoldTime(float timeMs)
 
 void LevelMeter::timerCallback()
 {
-    displayLevelDb = smoothingCoeff * displayLevelDb + (1.0f - smoothingCoeff) * currentLevelDb;
+    displayLevelDb = smoothingCoeff * displayLevelDb + (1.0f - smoothingCoeff) * currentLevelDb.load();
     
     if (meterType != MeterType::GainReduction)
     {
@@ -178,7 +178,9 @@ float LevelMeter::levelToY(float levelDb) const
 {
     auto bounds = getLocalBounds().toFloat().reduced(3.0f);
     float clampedLevel = juce::jlimit(minDb, maxDb, levelDb);
-    float normalizedLevel = (clampedLevel - minDb) / (maxDb - minDb);
+    float range = maxDb - minDb;
+    if (range < 0.001f) return bounds.getBottom();
+    float normalizedLevel = (clampedLevel - minDb) / range;
     return bounds.getBottom() - (normalizedLevel * bounds.getHeight());
 }
 

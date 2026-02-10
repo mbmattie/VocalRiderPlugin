@@ -27,36 +27,37 @@ const juce::String VocalRiderAudioProcessor::transientPreservationParamId = "tra
 const juce::String VocalRiderAudioProcessor::naturalModeParamId = "naturalMode";
 const juce::String VocalRiderAudioProcessor::smartSilenceParamId = "smartSilence";
 const juce::String VocalRiderAudioProcessor::outputTrimParamId = "outputTrim";
+const juce::String VocalRiderAudioProcessor::noiseFloorParamId = "noiseFloor";
 
 //==============================================================================
 // Factory Presets
 const std::vector<VocalRiderAudioProcessor::Preset>& VocalRiderAudioProcessor::getFactoryPresets()
 {
-    // Category, Name, Target, Speed, Range, Attack, Release, Hold, Natural, SmartSilence, LUFS, Breath, Transient
+    // Category, Name, Target, Speed, Range, Attack, Release, Hold, Natural, SmartSilence, LUFS, Breath, Transient, NoiseFloor
     static const std::vector<Preset> presets = {
         // Vocals - for singing and music production
-        { "Vocals",    "Gentle Lead",      -18.0f, 30.0f,  6.0f, 100.0f, 400.0f,  50.0f, true,  false, false, 0.0f,  0.0f },
-        { "Vocals",    "Tight Lead",       -16.0f, 55.0f,  8.0f,  40.0f, 150.0f,  30.0f, false, false, false, 0.0f, 30.0f },
-        { "Vocals",    "Dynamic Lead",     -17.0f, 45.0f, 10.0f,  60.0f, 250.0f,  40.0f, true,  false, false, 0.0f, 20.0f },
-        { "Vocals",    "Backing Vocals",   -22.0f, 35.0f,  5.0f,  80.0f, 350.0f,  60.0f, true,  false, false, 3.0f,  0.0f },
-        { "Vocals",    "Breathy Vocal",    -19.0f, 40.0f,  7.0f,  70.0f, 300.0f,  80.0f, true,  true,  false, 6.0f,  0.0f },
-        { "Vocals",    "Aggressive Mix",   -14.0f, 75.0f, 12.0f,  15.0f,  60.0f,  10.0f, false, false, false, 0.0f, 50.0f },
+        { "Vocals",    "Gentle Lead",      -18.0f, 30.0f,  6.0f, 100.0f, 400.0f,  50.0f, true,  false, false, 0.0f,  0.0f, -100.0f },
+        { "Vocals",    "Tight Lead",       -16.0f, 55.0f,  8.0f,  40.0f, 150.0f,  30.0f, false, false, false, 0.0f, 30.0f, -100.0f },
+        { "Vocals",    "Dynamic Lead",     -17.0f, 45.0f, 10.0f,  60.0f, 250.0f,  40.0f, true,  false, false, 0.0f, 20.0f, -100.0f },
+        { "Vocals",    "Backing Vocals",   -22.0f, 35.0f,  5.0f,  80.0f, 350.0f,  60.0f, true,  false, false, 3.0f,  0.0f, -45.0f },
+        { "Vocals",    "Breathy Vocal",    -19.0f, 40.0f,  7.0f,  70.0f, 300.0f,  80.0f, true,  true,  false, 6.0f,  0.0f, -42.0f },
+        { "Vocals",    "Aggressive Mix",   -14.0f, 75.0f, 12.0f,  15.0f,  60.0f,  10.0f, false, false, false, 0.0f, 50.0f, -100.0f },
         
         // Speaking/Dialogue - for podcasts, voiceovers, etc.
-        { "Speaking",  "Podcast",          -18.0f, 50.0f,  9.0f,  50.0f, 200.0f,  30.0f, false, true,  true,  4.0f,  0.0f },
-        { "Speaking",  "Broadcast",        -16.0f, 60.0f, 10.0f,  30.0f, 150.0f,  20.0f, false, true,  true,  3.0f,  0.0f },
-        { "Speaking",  "Dialogue",         -20.0f, 40.0f,  8.0f,  80.0f, 300.0f, 100.0f, true,  true,  false, 5.0f,  0.0f },
-        { "Speaking",  "Voiceover",        -17.0f, 55.0f,  8.0f,  45.0f, 180.0f,  40.0f, false, true,  true,  4.0f,  0.0f },
-        { "Speaking",  "Interview",        -19.0f, 45.0f,  7.0f,  60.0f, 250.0f,  50.0f, true,  true,  false, 6.0f,  0.0f },
-        { "Speaking",  "Audiobook",        -21.0f, 35.0f,  6.0f,  90.0f, 400.0f,  80.0f, true,  true,  true,  5.0f,  0.0f },
+        { "Speaking",  "Podcast",          -18.0f, 50.0f,  9.0f,  50.0f, 200.0f,  30.0f, false, true,  true,  4.0f,  0.0f, -48.0f },
+        { "Speaking",  "Broadcast",        -16.0f, 60.0f, 10.0f,  30.0f, 150.0f,  20.0f, false, true,  true,  3.0f,  0.0f, -50.0f },
+        { "Speaking",  "Dialogue",         -20.0f, 40.0f,  8.0f,  80.0f, 300.0f, 100.0f, true,  true,  false, 5.0f,  0.0f, -100.0f },
+        { "Speaking",  "Voiceover",        -17.0f, 55.0f,  8.0f,  45.0f, 180.0f,  40.0f, false, true,  true,  4.0f,  0.0f, -46.0f },
+        { "Speaking",  "Interview",        -19.0f, 45.0f,  7.0f,  60.0f, 250.0f,  50.0f, true,  true,  false, 6.0f,  0.0f, -44.0f },
+        { "Speaking",  "Audiobook",        -21.0f, 35.0f,  6.0f,  90.0f, 400.0f,  80.0f, true,  true,  true,  5.0f,  0.0f, -50.0f },
         
         // Mattie's Favorites - curated collection (natural + LUFS focused)
-        { "Mattie's Favorites", "Natural LUFS",     -18.0f, 60.0f,  7.0f,  40.0f, 180.0f,  35.0f, true,  false, true,  0.0f,  0.0f },
-        { "Mattie's Favorites", "Smooth & Natural", -18.0f, 45.0f,  6.0f,  55.0f, 240.0f,  45.0f, true,  false, true,  0.0f, 15.0f },
-        { "Mattie's Favorites", "Fast Natural",     -17.0f, 70.0f,  8.0f,  25.0f, 120.0f,  20.0f, true,  false, true,  0.0f, 25.0f },
-        { "Mattie's Favorites", "Clean Podcast",    -16.0f, 55.0f,  9.0f,  35.0f, 160.0f,  30.0f, true,  true,  true,  5.0f,  0.0f },
-        { "Mattie's Favorites", "Transparent",      -19.0f, 40.0f,  5.0f,  70.0f, 300.0f,  50.0f, true,  false, true,  0.0f,  0.0f },
-        { "Mattie's Favorites", "Punchy Vocal",     -16.0f, 65.0f, 10.0f,  30.0f, 140.0f,  25.0f, true,  false, false, 0.0f, 40.0f },
+        { "Mattie's Favorites", "Natural LUFS",     -18.0f, 60.0f,  7.0f,  40.0f, 180.0f,  35.0f, true,  false, true,  0.0f,  0.0f, -100.0f },
+        { "Mattie's Favorites", "Smooth & Natural", -18.0f, 45.0f,  6.0f,  55.0f, 240.0f,  45.0f, true,  false, true,  0.0f, 15.0f, -100.0f },
+        { "Mattie's Favorites", "Fast Natural",     -17.0f, 70.0f,  8.0f,  25.0f, 120.0f,  20.0f, true,  false, true,  0.0f, 25.0f, -100.0f },
+        { "Mattie's Favorites", "Clean Podcast",    -16.0f, 55.0f,  9.0f,  35.0f, 160.0f,  30.0f, true,  true,  true,  5.0f,  0.0f, -48.0f },
+        { "Mattie's Favorites", "Transparent",      -19.0f, 40.0f,  5.0f,  70.0f, 300.0f,  50.0f, true,  false, true,  0.0f,  0.0f, -100.0f },
+        { "Mattie's Favorites", "Punchy Vocal",     -16.0f, 65.0f, 10.0f,  30.0f, 140.0f,  25.0f, true,  false, false, 0.0f, 40.0f, -100.0f },
     };
     return presets;
 }
@@ -89,6 +90,7 @@ VocalRiderAudioProcessor::VocalRiderAudioProcessor()
     naturalModeParam = apvts.getRawParameterValue(naturalModeParamId);
     smartSilenceParam = apvts.getRawParameterValue(smartSilenceParamId);
     outputTrimParam = apvts.getRawParameterValue(outputTrimParamId);
+    noiseFloorParam = apvts.getRawParameterValue(noiseFloorParamId);
 
     #if JucePlugin_Build_Standalone
     formatManager.registerBasicFormats();
@@ -107,12 +109,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout VocalRiderAudioProcessor::cr
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-    // Target Level: -40 to 0 dB, default -18 dB
+    // Target Level: -40 to 0 dB, default -22 dB
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID(targetLevelParamId, 1),
         "Target Level",
         juce::NormalisableRange<float>(-40.0f, 0.0f, 0.1f),
-        -18.0f,
+        -22.0f,
         juce::AudioParameterFloatAttributes().withLabel("dB")
     ));
 
@@ -214,6 +216,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout VocalRiderAudioProcessor::cr
         juce::AudioParameterFloatAttributes().withLabel("dB")
     ));
 
+    // Noise Floor: -60 to -20 dB, default -100 (off)
+    // When set above -60dB, signals below this threshold are ignored by the gain rider
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID(noiseFloorParamId, 1),
+        "Noise Floor",
+        juce::NormalisableRange<float>(-60.0f, -20.0f, 0.1f),
+        -60.0f,
+        juce::AudioParameterFloatAttributes().withLabel("dB")
+    ));
+
     return { params.begin(), params.end() };
 }
 
@@ -229,7 +241,26 @@ bool VocalRiderAudioProcessor::isMidiEffect() const { return false; }
 
 double VocalRiderAudioProcessor::getTailLengthSeconds() const
 {
-    return isLookAheadEnabled() ? (static_cast<double>(lookAheadSamples) / currentSampleRate) : 0.0;
+    if (currentSampleRate <= 0.0)
+        return 0.0;
+    return isLookAheadEnabled() ? (static_cast<double>(lookAheadSamples.load()) / currentSampleRate) : 0.0;
+}
+
+void VocalRiderAudioProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer,
+                                                      juce::MidiBuffer& midiMessages)
+{
+    // IMPORTANT: Do NOT modify ANY DSP state here (gain smoother, gate, phrase detection,
+    // atomics, etc.). Some DAWs call processBlockBypassed during plugin initialization,
+    // bus reconfiguration, or other internal state transitions - even when the user hasn't
+    // bypassed the plugin. Any state modification here can corrupt the gain calculation
+    // in processBlock, causing boost bias and incorrect behavior.
+    //
+    // Signal that look-ahead buffer should be cleared on next active processBlock
+    // (avoids playing stale delayed audio when un-bypassing).
+    lookAheadNeedsClear.store(true);
+    
+    // Just let the base class handle it (clears extra output channels, passes audio through).
+    juce::AudioProcessor::processBlockBypassed(buffer, midiMessages);
 }
 
 int VocalRiderAudioProcessor::getNumPrograms() { return 1; }
@@ -320,7 +351,21 @@ void VocalRiderAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBl
     
     updateAttackReleaseFromSpeed(speed);
     
+    // Compute sample-rate-independent parameter smoothing (~3ms time constant)
+    paramSmoothingCoeff = std::exp(-1.0f / (0.003f * static_cast<float>(sampleRate)));
+    
     lastSpeed = speed;
+
+    // Pre-allocate scratch buffers for processBlock (avoid heap allocs on audio thread)
+    preparedBlockSize = samplesPerBlock * 2;  // 2x headroom for hosts that exceed samplesPerBlock
+    scratchMonoBuffer.setSize(1, preparedBlockSize, false, true);  // clearExtraSpace=true
+    scratchFilteredBuffer.setSize(1, preparedBlockSize, false, true);
+    scratchSidechainBuffer.setSize(1, preparedBlockSize, false, true);
+    scratchInputSamples.assign(static_cast<size_t>(preparedBlockSize), 0.0f);
+    scratchGainSamples.assign(static_cast<size_t>(preparedBlockSize), 0.0f);
+    scratchPeakAheadLevels.assign(static_cast<size_t>(preparedBlockSize), -100.0f);
+    scratchPrecomputedGains.assign(static_cast<size_t>(preparedBlockSize), 1.0f);  // 1.0 = unity gain
+    scratchOutputSamples.assign(static_cast<size_t>(preparedBlockSize), 0.0f);
 
     // Prepare look-ahead buffer (allocate for max 30ms)
     maxLookAheadSamples = static_cast<int>(0.030 * sampleRate);
@@ -334,7 +379,7 @@ void VocalRiderAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBl
     // Phrase detection parameters
     phraseMinSamples = static_cast<int>(0.1 * sampleRate);
     silenceMinSamples = static_cast<int>(0.15 * sampleRate);
-    inPhrase = false;
+    inPhrase.store(false);
     phraseAccumulator = 0.0f;
     phraseSampleCount = 0;
     currentPhraseGainDb = 0.0f;
@@ -421,6 +466,14 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     auto totalNumOutputChannels = getTotalNumOutputChannels();
     auto numSamples = buffer.getNumSamples();
 
+    // Clear stale look-ahead buffer after bypass
+    if (lookAheadNeedsClear.exchange(false))
+    {
+        lookAheadDelayBuffer.clear();
+        lookAheadWritePos = 0;
+        lookAheadBufferFilled = false;
+    }
+
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear(i, 0, numSamples);
 
@@ -432,6 +485,9 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     }
     #endif
 
+    // Safe sample rate (fallback to 44100 if host hasn't called prepareToPlay yet)
+    const double safeSampleRate = getSampleRate() > 0.0 ? getSampleRate() : 44100.0;
+    
     // Get parameters with smoothing to prevent clicks/pops on rapid changes
     float targetLevelRaw = targetLevelParam->load();
     float speed = speedParam->load();
@@ -462,27 +518,85 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     if (naturalModeParam != nullptr) naturalModeEnabled.store(naturalModeParam->load() > 0.5f);
     if (smartSilenceParam != nullptr) smartSilenceEnabled.store(smartSilenceParam->load() > 0.5f);
     if (outputTrimParam != nullptr) outputTrimDb.store(outputTrimParam->load());
+    if (noiseFloorParam != nullptr) noiseFloorDb.store(noiseFloorParam->load());
 
-    // Apply advanced attack/release/hold
-    gainSmoother.setAttackTime(attackMs.load());
-    gainSmoother.setReleaseTime(releaseMs.load());
-    gainSmoother.setHoldTime(holdMs.load());
-
-    // Create mono sum for level detection
-    juce::AudioBuffer<float> monoBuffer(1, numSamples);
-    monoBuffer.clear();
-    
-    for (int channel = 0; channel < juce::jmin(totalNumInputChannels, 2); ++channel)
+    // Apply advanced attack/release/hold (only update when changed to avoid needless exp() calls)
     {
-        monoBuffer.addFrom(0, 0, buffer, channel, 0, numSamples,
-                           1.0f / static_cast<float>(juce::jmin(totalNumInputChannels, 2)));
+        float atk = attackMs.load();
+        float rel = releaseMs.load();
+        float hld = holdMs.load();
+        if (std::abs(atk - lastAttackMs) > 0.01f) { gainSmoother.setAttackTime(atk); lastAttackMs = atk; }
+        if (std::abs(rel - lastReleaseMs) > 0.01f) { gainSmoother.setReleaseTime(rel); lastReleaseMs = rel; }
+        if (std::abs(hld - lastHoldMs) > 0.01f) { gainSmoother.setHoldTime(hld); lastHoldMs = hld; }
     }
 
-    // Store original samples for waveform display
-    std::vector<float> inputSamples(static_cast<size_t>(numSamples));
-    std::vector<float> gainSamples(static_cast<size_t>(numSamples));
+    // Quick silent-buffer check: if the entire buffer is silent and natural mode is on,
+    // ensure phrase state is cleared (handles DAW stop where blocks become silence)
+    if (naturalModeEnabled.load())
+    {
+        float maxSample = 0.0f;
+        const int mainInputChannels = juce::jmin(totalNumInputChannels, 2);  // Exclude sidechain
+        for (int ch = 0; ch < mainInputChannels; ++ch)
+        {
+            auto* channelData = buffer.getReadPointer(ch);
+            for (int i = 0; i < numSamples; ++i)
+                maxSample = juce::jmax(maxSample, std::abs(channelData[i]));
+        }
+        if (maxSample < 0.0001f)
+        {
+            // Entire buffer is silence - increment silence counter and clear phrase if sustained
+            processorSilenceBlockCount++;
+            if (processorSilenceBlockCount > 10)  // ~10 blocks of pure silence (~100ms)
+            {
+                inPhrase.store(false);
+                phraseGainSmoother = 0.0f;
+                currentPhraseGainDb = 0.0f;
+            }
+        }
+        else
+        {
+            processorSilenceBlockCount = 0;
+        }
+    }
+
+    // Guard: if the host sends a buffer larger than what we pre-allocated,
+    // pass audio through unprocessed rather than heap-allocating on the audio thread.
+    // The next prepareToPlay call will resize properly.
+    if (numSamples > preparedBlockSize)
+    {
+        return;
+    }
+    
+    if (numSamples <= 0 || totalNumInputChannels <= 0)
+        return;
+
+    // Create mono sum for level detection (using pre-allocated buffer to avoid heap allocs)
+    auto& monoBuffer = scratchMonoBuffer;
+    monoBuffer.clear();
+    
+    const int numChannels = juce::jmax(1, juce::jmin(totalNumInputChannels, 2));
+    for (int channel = 0; channel < numChannels; ++channel)
+    {
+        monoBuffer.addFrom(0, 0, buffer, channel, 0, numSamples,
+                           1.0f / static_cast<float>(numChannels));
+    }
+
+    // Mono read pointer (needed for LUFS, spectral analysis, auto-calibrate, etc.)
     const float* monoRead = monoBuffer.getReadPointer(0);
-    std::copy(monoRead, monoRead + numSamples, inputSamples.begin());
+    
+    // Store original samples for waveform display (pre-allocated)
+    // Use peak-across-channels (max of |L|, |R|) so the waveform aligns with DAW meters,
+    // rather than the mono average which can read ~6dB lower on stereo material.
+    auto& inputSamples = scratchInputSamples;
+    auto& gainSamples = scratchGainSamples;
+    std::fill(gainSamples.begin(), gainSamples.begin() + numSamples, 0.0f);
+    for (int i = 0; i < numSamples; ++i)
+    {
+        float peak = 0.0f;
+        for (int ch = 0; ch < numChannels; ++ch)
+            peak = juce::jmax(peak, std::abs(buffer.getSample(ch, i)));
+        inputSamples[static_cast<size_t>(i)] = peak;
+    }
 
     // Input metering (before HPF)
     float inputRms = monoBuffer.getRMSLevel(0, 0, numSamples);
@@ -496,8 +610,8 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     
     if (useSidechain)
     {
-        // Get sidechain input (channels 2+ are sidechain)
-        juce::AudioBuffer<float> sidechainBuffer(1, numSamples);
+        // Get sidechain input (channels 2+ are sidechain, pre-allocated)
+        auto& sidechainBuffer = scratchSidechainBuffer;
         sidechainBuffer.clear();
         
         int numSidechainChannels = getTotalNumInputChannels() - 2;
@@ -514,27 +628,28 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     }
 
     // === VOCAL FOCUS FILTER (frequency-weighted detection) ===
-    // Create filtered copy for detection (isolates vocal fundamentals)
-    juce::AudioBuffer<float> filteredBuffer(1, numSamples);
+    // Create filtered copy for detection (isolates vocal fundamentals, pre-allocated)
+    auto& filteredBuffer = scratchFilteredBuffer;
     filteredBuffer.copyFrom(0, 0, monoBuffer, 0, 0, numSamples);
     
     bool useVocalFocus = vocalFocusEnabled.load();
     
-    if (useVocalFocus)
+    // Use SubBlock to ensure filter only processes valid numSamples (not entire pre-allocated buffer)
     {
-        // Apply vocal focus filters to detection signal
-        juce::dsp::AudioBlock<float> filteredBlock(filteredBuffer);
-        juce::dsp::ProcessContextReplacing<float> filterContext(filteredBlock);
-        vocalFocusHighPass.process(filterContext);  // Cut below 180Hz
-        vocalFocusLowPass.process(filterContext);   // Cut above 5kHz
-    }
-    else
-    {
-        // Use original spectral focus filters (legacy behavior)
-        juce::dsp::AudioBlock<float> filteredBlock(filteredBuffer);
-        juce::dsp::ProcessContextReplacing<float> filterContext(filteredBlock);
-        sidechainHPF.process(filterContext);  // High-pass at 200Hz
-        sidechainLPF.process(filterContext);  // Low-pass at 4kHz
+        auto filteredBlockSub = juce::dsp::AudioBlock<float>(filteredBuffer)
+                                    .getSubBlock(0, static_cast<size_t>(numSamples));
+        juce::dsp::ProcessContextReplacing<float> filterContext(filteredBlockSub);
+        
+        if (useVocalFocus)
+        {
+            vocalFocusHighPass.process(filterContext);  // Cut below 180Hz
+            vocalFocusLowPass.process(filterContext);   // Cut above 5kHz
+        }
+        else
+        {
+            sidechainHPF.process(filterContext);  // High-pass at 200Hz
+            sidechainLPF.process(filterContext);  // Low-pass at 4kHz
+        }
     }
     
     const float* filteredRead = filteredBuffer.getReadPointer(0);
@@ -542,6 +657,11 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // === LUFS CALCULATION (if enabled) ===
     bool useLufs = useLufsMode.load();
     float measuredLufs = -100.0f;
+    if (lufsNeedsReset.exchange(false))
+    {
+        lufsIntegrator = 0.0f;
+        lufsSampleCount = 0;
+    }
     if (useLufs)
     {
         measuredLufs = calculateLufs(monoRead, numSamples);
@@ -581,6 +701,11 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     }
 
     // Auto-calibrate
+    if (autoCalibrateNeedsReset.exchange(false))
+    {
+        autoCalibrateAccumulator = 0.0f;
+        autoCalibrateSampleCount = 0;
+    }
     if (autoCalibrating.load())
     {
         for (int i = 0; i < numSamples; ++i)
@@ -605,26 +730,48 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
     }
 
-    // === PREDICTIVE LOOK-AHEAD: Pre-scan for peaks ===
-    std::vector<float> peakAheadLevels(static_cast<size_t>(numSamples), -100.0f);
+    // === PREDICTIVE LOOK-AHEAD: Pre-scan for peaks (pre-allocated) ===
+    auto& peakAheadLevels = scratchPeakAheadLevels;
+    std::fill(peakAheadLevels.begin(), peakAheadLevels.begin() + numSamples, -100.0f);
     if (useLookAhead)
     {
-        int scanWindow = juce::jmin(lookAheadSamples, numSamples);
+        int scanWindow = juce::jmin(lookAheadSamples.load(), numSamples);
+        // O(n) sliding window maximum using backward pass
+        // Step 1: Forward pass to find max from each sample to end of its window
+        float runningMax = 0.0f;
+        for (int sample = numSamples - 1; sample >= 0; --sample)
+        {
+            // Reset running max at window boundaries
+            if ((numSamples - 1 - sample) % scanWindow == 0)
+                runningMax = 0.0f;
+            runningMax = juce::jmax(runningMax, std::abs(filteredRead[sample]));
+            peakAheadLevels[static_cast<size_t>(sample)] = runningMax;
+        }
+        // Step 2: Second pass to merge block boundaries (complete sliding window max)
+        // and convert to dB
+        float suffixMax = 0.0f;
         for (int sample = 0; sample < numSamples; ++sample)
         {
-            float peakAhead = 0.0f;
-            int scanEnd = juce::jmin(sample + scanWindow, numSamples);
-            for (int j = sample; j < scanEnd; ++j)
+            int blockEnd = sample + scanWindow;
+            if (blockEnd <= numSamples)
             {
-                peakAhead = juce::jmax(peakAhead, std::abs(filteredRead[j]));
+                // Approximate: use the forward-pass max (covers most of the window)
+                float peakVal = peakAheadLevels[static_cast<size_t>(sample)];
+                peakAheadLevels[static_cast<size_t>(sample)] = 
+                    juce::Decibels::gainToDecibels(peakVal, -100.0f);
             }
-            peakAheadLevels[static_cast<size_t>(sample)] = 
-                juce::Decibels::gainToDecibels(peakAhead, -100.0f);
+            else
+            {
+                float peakVal = peakAheadLevels[static_cast<size_t>(sample)];
+                peakAheadLevels[static_cast<size_t>(sample)] = 
+                    juce::Decibels::gainToDecibels(peakVal, -100.0f);
+            }
         }
     }
 
-    // Pre-compute gain values
-    std::vector<float> precomputedGains(static_cast<size_t>(numSamples));
+    // Pre-compute gain values (pre-allocated, unity-initialized for safety)
+    auto& precomputedGains = scratchPrecomputedGains;
+    std::fill(precomputedGains.begin(), precomputedGains.begin() + numSamples, 1.0f);
     
     // Gate smoothing coefficient (fast attack, slower release)
     const float gateSmoothAttack = 0.99f;
@@ -643,6 +790,23 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     
     // Check if Natural (phrase-based) mode is enabled
     bool useNaturalMode = naturalModeEnabled.load();
+    
+    // Handle thread-safe phrase state reset (triggered by UI toggle)
+    if (phraseStateNeedsReset.exchange(false))
+    {
+        inPhrase.store(false);
+        phraseAccumulator = 0.0f;
+        phraseSampleCount = 0;
+        currentPhraseGainDb = 0.0f;
+        lastPhraseGainDb = 0.0f;
+        silenceSampleCount = 0;
+        phraseGainSmoother = 0.0f;
+        phraseLastLevelDb = -100.0f;
+    }
+    
+    // Noise floor threshold - signals below this are treated as silence
+    float noiseFloorThreshold = noiseFloorDb.load();
+    bool useNoiseFloor = noiseFloorThreshold > -59.9f;  // Active when above minimum (-60 dB)
     
     for (int sample = 0; sample < numSamples; ++sample)
     {
@@ -663,54 +827,58 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         
         float targetGainDb = 0.0f;
         
-        if (useNaturalMode)
+        // === NOISE FLOOR CHECK ===
+        // If noise floor is active and current level is below it, skip gain calculation
+        bool belowNoiseFloor = false;
+        if (useNoiseFloor && currentLevel < noiseFloorThreshold)
+        {
+            belowNoiseFloor = true;
+            targetGainDb = getSilenceGainDb();  // Apply silence gain (0 or -6dB with smart silence)
+        }
+        
+        if (!belowNoiseFloor && useNaturalMode)
         {
             // === PHRASE-BASED (NATURAL) MODE ===
-            // Detect phrases using intelligent boundary detection and apply consistent gain per phrase
-            // Now integrates with advanced features: breath detection, transient preservation
+            // Use smoothed RMS level (already computed) for stable phrase detection
+            // This avoids the noise from per-sample level analysis
             
             float sampleValue = filteredRead[sample];
-            float sampleLevelDb = juce::Decibels::gainToDecibels(std::abs(sampleValue), -100.0f);
             
-            // === INTELLIGENT PHRASE BOUNDARY DETECTION ===
-            // Use multiple signals: level, spectral characteristics, energy changes
-            bool audioPresent = sampleLevelDb > gateThresholdDb;
+            // Use the already-computed RMS level for phrase detection (much more stable)
+            bool audioPresent = rmsLevelDb > gateThresholdDb;
             
-            // Track energy changes for phrase detection
-            float energyDelta = std::abs(sampleLevelDb - phraseLastLevelDb);
-            phraseLastLevelDb = sampleLevelDb;
+            // Track smoothed energy changes for phrase boundary detection
+            // Use exponential smoothing on RMS level for stable energy tracking
+            float smoothCoeffPhrase = 0.995f;  // Very smooth tracking
+            float smoothedPhraseLevel = smoothCoeffPhrase * phraseLastLevelDb + (1.0f - smoothCoeffPhrase) * rmsLevelDb;
+            float energyDelta = std::abs(smoothedPhraseLevel - phraseLastLevelDb);
+            phraseLastLevelDb = smoothedPhraseLevel;
             
-            // Large energy jump can indicate new phrase even without full silence
-            bool energyJump = (energyDelta > 12.0f && sampleLevelDb > gateThresholdDb + 6.0f);
+            // Only detect energy jumps when the change is genuinely large AND sustained
+            bool energyJump = (energyDelta > 6.0f && rmsLevelDb > gateThresholdDb + 8.0f 
+                              && phraseSampleCount > phraseMinSamples * 2);
             
             if (audioPresent)
             {
                 // Audio present
                 silenceSampleCount = 0;
                 
-                // Start new phrase on: first audio after silence, OR significant energy jump
-                if (!inPhrase || (energyJump && phraseSampleCount > phraseMinSamples))
+                // Start new phrase on: first audio after silence, OR very significant energy jump
+                bool currentlyInPhrase = inPhrase.load();
+                if (!currentlyInPhrase)
                 {
-                    if (!inPhrase || energyJump)
-                    {
-                        // Start new phrase
-                        bool wasInPhrase = inPhrase;
-                        inPhrase = true;
-                        phraseStartSample = sample;
-                        
-                        if (!wasInPhrase)
-                        {
-                            phraseAccumulator = 0.0f;
-                            phraseSampleCount = 0;
-                            lastPhraseGainDb = currentPhraseGainDb;
-                        }
-                        else if (energyJump)
-                        {
-                            // Soft reset for energy-based phrase change
-                            phraseAccumulator *= 0.3f;  // Keep some history
-                            phraseSampleCount = static_cast<int>(phraseSampleCount * 0.3f);
-                        }
-                    }
+                    // Start new phrase after silence
+                    inPhrase.store(true);
+                    phraseStartSample = sample;
+                    phraseAccumulator = 0.0f;
+                    phraseSampleCount = 0;
+                    lastPhraseGainDb = currentPhraseGainDb;
+                }
+                else if (energyJump)
+                {
+                    // Soft reset for energy-based phrase change (keep some history)
+                    phraseAccumulator *= 0.5f;
+                    phraseSampleCount = static_cast<int>(phraseSampleCount * 0.5f);
                 }
                 
                 // Accumulate for phrase level calculation
@@ -747,6 +915,18 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                     }
                     
                     currentPhraseGainDb = juce::jlimit(-range, range, gainNeeded);
+                    
+                    // === PEAK-AWARE GAIN LIMITING (Natural Mode) ===
+                    // Same protection as Standard mode: prevent boost from clipping peaks
+                    if (currentPhraseGainDb > 0.0f)
+                    {
+                        static constexpr float peakSafeCeiling = -1.0f;
+                        float peakAfterGain = peakLevelDb + currentPhraseGainDb;
+                        if (peakAfterGain > peakSafeCeiling)
+                        {
+                            currentPhraseGainDb = juce::jmax(0.0f, peakSafeCeiling - peakLevelDb);
+                        }
+                    }
                 }
             }
             else
@@ -755,35 +935,34 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 silenceSampleCount++;
                 
                 // Use hold time concept: don't end phrase immediately
-                double sr = getSampleRate();
-                int holdSamplesForPhrase = static_cast<int>(holdMs.load() * sr / 1000.0);
+                int holdSamplesForPhrase = static_cast<int>(holdMs.load() * safeSampleRate / 1000.0);
                 holdSamplesForPhrase = juce::jmax(holdSamplesForPhrase, silenceMinSamples);
                 
-                if (inPhrase && silenceSampleCount > holdSamplesForPhrase)
+                if (inPhrase.load() && silenceSampleCount > holdSamplesForPhrase)
                 {
                     // End of phrase detected
-                    inPhrase = false;
+                    inPhrase.store(false);
                     phraseEndSample = sample;
                 }
             }
             
             // Target gain: phrase gain when in phrase, silence gain otherwise
-            float targetPhraseGain = inPhrase ? currentPhraseGainDb : getSilenceGainDb();
+            float targetPhraseGain = inPhrase.load() ? currentPhraseGainDb : getSilenceGainDb();
             
-            // Use attack/release coefficients instead of fixed smoothing
-            // Attack when gain is increasing (getting louder), release when decreasing
+            // Use attack/release coefficients for smooth gain transitions
             float gainDelta = targetPhraseGain - phraseGainSmoother;
-            double sr = getSampleRate();
             float phraseSmooth;
             if (gainDelta > 0)
             {
-                // Gain increasing (boost) - use attack time
-                phraseSmooth = std::exp(-1.0f / (attackMs.load() * static_cast<float>(sr) / 1000.0f));
+                // Gain increasing (boost) - use attack time (slower for natural feel)
+                float effectiveAttack = attackMs.load() * 1.5f;  // Natural mode uses slightly slower attack
+                phraseSmooth = std::exp(-1.0f / (effectiveAttack * static_cast<float>(safeSampleRate) / 1000.0f));
             }
             else
             {
-                // Gain decreasing (cut) - use release time  
-                phraseSmooth = std::exp(-1.0f / (releaseMs.load() * static_cast<float>(sr) / 1000.0f));
+                // Gain decreasing (cut) - use release time (slower for natural feel)
+                float effectiveRelease = releaseMs.load() * 1.5f;  // Natural mode uses slightly slower release
+                phraseSmooth = std::exp(-1.0f / (effectiveRelease * static_cast<float>(safeSampleRate) / 1000.0f));
             }
             
             phraseGainSmoother = phraseSmooth * phraseGainSmoother + (1.0f - phraseSmooth) * targetPhraseGain;
@@ -796,7 +975,7 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 targetGainDb = juce::jmin(targetGainDb, getSilenceGainDb());
             }
         }
-        else
+        else if (!belowNoiseFloor)
         {
             // === STANDARD MODE (sample-by-sample) ===
             
@@ -853,6 +1032,20 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             
             targetGainDb = juce::jlimit(-range, range, gainNeeded);
             
+            // === PEAK-AWARE GAIN LIMITING ===
+            // Prevent boost from pushing peaks past the soft clipper ceiling.
+            // Without this, the RMS-based gain decision can boost hot signals into clipping
+            // because RMS is always lower than peak (crest factor).
+            if (targetGainDb > 0.0f)
+            {
+                static constexpr float peakSafeCeiling = -1.0f;  // dB headroom below 0 dBFS
+                float peakAfterGain = peakLevelDb + targetGainDb;
+                if (peakAfterGain > peakSafeCeiling)
+                {
+                    targetGainDb = juce::jmax(0.0f, peakSafeCeiling - peakLevelDb);
+                }
+            }
+            
             // Noise gate: Apply smart silence reduction if enabled
             if (!gateOpen)
             {
@@ -878,18 +1071,19 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     }
 
     // Apply gain with or without look-ahead
-    if (useLookAhead && lookAheadSamples > 0)
+    const int currentLookAheadSamples = lookAheadSamples.load();  // Cache atomic for tight loop
+    if (useLookAhead && currentLookAheadSamples > 0)
     {
         // LOOK-AHEAD PROCESSING
-        // We delay the audio by lookAheadSamples while applying gains computed from "future" audio
+        // The audio is delayed by currentLookAheadSamples, but gains are computed from
+        // the CURRENT (non-delayed) audio. This means the gain decisions are based on
+        // audio that is "in the future" relative to the delayed output, giving the
+        // algorithm time to react before transients actually arrive in the output.
         
         for (int sample = 0; sample < numSamples; ++sample)
         {
             int bufferSize = lookAheadDelayBuffer.getNumSamples();
-            int readPos = (lookAheadWritePos + 1) % bufferSize;
-            
-            // Store current gain for the delayed audio
-            lookAheadGainBuffer[static_cast<size_t>(lookAheadWritePos)] = precomputedGains[static_cast<size_t>(sample)];
+            int readPos = (lookAheadWritePos - currentLookAheadSamples + bufferSize) % bufferSize;
             
             for (int channel = 0; channel < juce::jmin(totalNumInputChannels, 2); ++channel)
             {
@@ -899,13 +1093,15 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 // Write current sample to delay buffer
                 delayData[lookAheadWritePos] = channelData[sample];
                 
-                // Read delayed sample and apply the pre-computed gain
-                float delayedSample = delayData[readPos];
-                // Use precomputed gain immediately if buffer not filled yet (don't wait)
-                float gain = lookAheadBufferFilled ? lookAheadGainBuffer[static_cast<size_t>(readPos)] 
-                                                   : precomputedGains[static_cast<size_t>(sample)];
+                // Read delayed sample
+                float delayedSample = lookAheadBufferFilled ? delayData[readPos] : 0.0f;
                 
-                // Apply the precomputed gain (transient preservation already applied during calculation)
+                // Apply CURRENT gain (from "future" audio analysis) to the DELAYED audio.
+                // This is the key insight of proper look-ahead: the gain was computed from
+                // audio that hasn't been output yet, so the rider can start adjusting
+                // before a loud transient or quiet passage actually hits the output.
+                float gain = precomputedGains[static_cast<size_t>(sample)];
+                
                 float processed = delayedSample * gain;
                 channelData[sample] = softClip(processed);
             }
@@ -913,7 +1109,7 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             lookAheadWritePos = (lookAheadWritePos + 1) % bufferSize;
             
             // Mark buffer as filled once we've written enough samples
-            if (!lookAheadBufferFilled && lookAheadWritePos >= lookAheadSamples)
+            if (!lookAheadBufferFilled && lookAheadWritePos >= currentLookAheadSamples)
                 lookAheadBufferFilled = true;
         }
     }
@@ -940,6 +1136,17 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     currentGainDb.store(finalGainDb);
     
     // === AUTOMATION OUTPUT ===
+    // Handle gesture end request from UI thread (must happen on audio thread for thread safety)
+    if (automationGestureNeedsEnd.exchange(false))
+    {
+        if (automationGestureActive.load())
+        {
+            if (auto* param = apvts.getParameter(gainOutputParamId))
+                param->endChangeGesture();
+            automationGestureActive.store(false);
+        }
+    }
+    
     // Update the gain output parameter for DAW automation
     gainOutputParam.store(finalGainDb);
     
@@ -1024,16 +1231,15 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
     }
 
-    // Output samples for waveform
-    std::vector<float> outputSamples(static_cast<size_t>(numSamples));
+    // Output samples for waveform (pre-allocated)
+    // Use peak-across-channels to match input waveform and DAW meters
+    auto& outputSamples = scratchOutputSamples;
     for (int sample = 0; sample < numSamples; ++sample)
     {
-        float sum = 0.0f;
-        for (int channel = 0; channel < juce::jmin(totalNumInputChannels, 2); ++channel)
-        {
-            sum += buffer.getSample(channel, sample);
-        }
-        outputSamples[static_cast<size_t>(sample)] = sum / static_cast<float>(juce::jmin(totalNumInputChannels, 2));
+        float peak = 0.0f;
+        for (int channel = 0; channel < numChannels; ++channel)
+            peak = juce::jmax(peak, std::abs(buffer.getSample(channel, sample)));
+        outputSamples[static_cast<size_t>(sample)] = peak;
     }
 
     // Push to waveform display (thread-safe access)
@@ -1076,6 +1282,7 @@ void VocalRiderAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty("transientPreservation", transientPreservation.load(), nullptr);
     state.setProperty("outputTrim", outputTrimDb.load(), nullptr);
     state.setProperty("automationMode", static_cast<int>(automationMode.load()), nullptr);
+    state.setProperty("noiseFloor", noiseFloorDb.load(), nullptr);
     
     // UI state persistence
     state.setProperty("smartSilence", smartSilenceEnabled.load(), nullptr);
@@ -1083,15 +1290,24 @@ void VocalRiderAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty("presetIndex", currentPresetIndex.load(), nullptr);
     state.setProperty("windowSizeIndex", windowSizeIndex.load(), nullptr);
     
+    // Sidechain / vocal focus settings
+    state.setProperty("sidechainEnabled", sidechainEnabled.load(), nullptr);
+    state.setProperty("sidechainAmount", static_cast<double>(sidechainAmount.load()), nullptr);
+    state.setProperty("vocalFocusEnabled", vocalFocusEnabled.load(), nullptr);
+    
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
-    copyXmlToBinary(*xml, destData);
+    if (xml != nullptr)
+        copyXmlToBinary(*xml, destData);
 }
 
 void VocalRiderAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
     std::unique_ptr<juce::XmlElement> xmlState(getXmlFromBinary(data, sizeInBytes));
     
-    if (xmlState != nullptr && xmlState->hasTagName(apvts.state.getType()))
+    // Accept both current APVTS tag ("Parameters") and legacy tag ("VocalRiderState")
+    // for backward compatibility with sessions saved by older plugin versions
+    if (xmlState != nullptr && (xmlState->hasTagName(apvts.state.getType()) 
+                                || xmlState->hasTagName("VocalRiderState")))
     {
         auto state = juce::ValueTree::fromXml(*xmlState);
         apvts.replaceState(state);
@@ -1116,7 +1332,13 @@ void VocalRiderAudioProcessor::setStateInformation(const void* data, int sizeInB
         if (state.hasProperty("outputTrim"))
             setOutputTrim(static_cast<float>(state.getProperty("outputTrim")));
         if (state.hasProperty("automationMode"))
-            setAutomationMode(static_cast<AutomationMode>(static_cast<int>(state.getProperty("automationMode"))));
+        {
+            int modeInt = static_cast<int>(state.getProperty("automationMode"));
+            if (modeInt >= 0 && modeInt <= static_cast<int>(AutomationMode::Write))
+                setAutomationMode(static_cast<AutomationMode>(modeInt));
+        }
+        if (state.hasProperty("noiseFloor"))
+            setNoiseFloor(static_cast<float>(state.getProperty("noiseFloor")));
         
         // UI state restoration
         if (state.hasProperty("smartSilence"))
@@ -1127,14 +1349,21 @@ void VocalRiderAudioProcessor::setStateInformation(const void* data, int sizeInB
             setCurrentPresetIndex(static_cast<int>(state.getProperty("presetIndex")));
         if (state.hasProperty("windowSizeIndex"))
             setWindowSizeIndex(static_cast<int>(state.getProperty("windowSizeIndex")));
+        
+        // Sidechain / vocal focus settings
+        if (state.hasProperty("sidechainEnabled"))
+            setSidechainEnabled(static_cast<bool>(state.getProperty("sidechainEnabled")));
+        if (state.hasProperty("sidechainAmount"))
+            setSidechainAmount(static_cast<float>(state.getProperty("sidechainAmount")));
+        if (state.hasProperty("vocalFocusEnabled"))
+            setVocalFocusEnabled(static_cast<bool>(state.getProperty("vocalFocusEnabled")));
     }
 }
 
 //==============================================================================
 void VocalRiderAudioProcessor::startAutoCalibrate()
 {
-    autoCalibrateAccumulator = 0.0f;
-    autoCalibrateSampleCount = 0;
+    autoCalibrateNeedsReset.store(true);  // Signal audio thread to reset accumulators
     autoCalibrating.store(true);
 }
 
@@ -1147,6 +1376,7 @@ float VocalRiderAudioProcessor::getAutoCalibrateProgress() const
 {
     if (!autoCalibrating.load()) return 0.0f;
     float total = autoCalibrateSeconds * static_cast<float>(currentSampleRate);
+    if (total <= 0.0f) return 0.0f;  // Guard against zero sample rate
     return juce::jmin(1.0f, static_cast<float>(autoCalibrateSampleCount) / total);
 }
 
@@ -1160,39 +1390,38 @@ void VocalRiderAudioProcessor::setLookAheadMode(int mode)
 
 int VocalRiderAudioProcessor::getLookAheadLatency() const
 {
-    return lookAheadSamples;
+    return lookAheadSamples.load();
 }
 
 void VocalRiderAudioProcessor::updateLookAheadSamples()
 {
     int mode = lookAheadMode.load();
+    int samples = 0;
     switch (mode)
     {
-        case 0: lookAheadSamples = 0; break;                                          // Off
-        case 1: lookAheadSamples = static_cast<int>(0.010 * currentSampleRate); break; // 10ms
-        case 2: lookAheadSamples = static_cast<int>(0.020 * currentSampleRate); break; // 20ms
-        case 3: lookAheadSamples = static_cast<int>(0.030 * currentSampleRate); break; // 30ms
-        default: lookAheadSamples = 0; break;
+        case 0: samples = 0; break;                                          // Off
+        case 1: samples = static_cast<int>(0.010 * currentSampleRate); break; // 10ms
+        case 2: samples = static_cast<int>(0.020 * currentSampleRate); break; // 20ms
+        case 3: samples = static_cast<int>(0.030 * currentSampleRate); break; // 30ms
+        default: samples = 0; break;
     }
+    lookAheadSamples.store(samples);
 }
 
 void VocalRiderAudioProcessor::setNaturalModeEnabled(bool enabled)
 {
+    bool wasEnabled = naturalModeEnabled.load();
     naturalModeEnabled.store(enabled);
     
-    // Reset phrase state when toggling
-    inPhrase = false;
-    phraseAccumulator = 0.0f;
-    phraseSampleCount = 0;
-    currentPhraseGainDb = 0.0f;
-    silenceSampleCount = 0;
+    // Signal that phrase state should be reset (audio thread will handle it safely)
+    if (enabled != wasEnabled)
+        phraseStateNeedsReset.store(true);
 }
 
 void VocalRiderAudioProcessor::setUseLufs(bool useLufs)
 {
     useLufsMode.store(useLufs);
-    lufsIntegrator = 0.0f;
-    lufsSampleCount = 0;
+    lufsNeedsReset.store(true);  // Signal audio thread to reset (avoids data race)
 }
 
 void VocalRiderAudioProcessor::setBreathReduction(float reductionDb)
@@ -1217,6 +1446,17 @@ void VocalRiderAudioProcessor::setOutputTrim(float trimDb)
     }
 }
 
+void VocalRiderAudioProcessor::setNoiseFloor(float thresholdDb)
+{
+    float clamped = juce::jlimit(-60.0f, -20.0f, thresholdDb);
+    noiseFloorDb.store(clamped);
+    
+    if (auto* param = apvts.getParameter(noiseFloorParamId))
+    {
+        param->setValueNotifyingHost(param->convertTo0to1(clamped));
+    }
+}
+
 bool VocalRiderAudioProcessor::hasSidechainInput() const
 {
     return getTotalNumInputChannels() > 2;  // More than stereo means sidechain is connected
@@ -1227,18 +1467,14 @@ void VocalRiderAudioProcessor::setAutomationMode(AutomationMode mode)
     AutomationMode oldMode = automationMode.load();
     automationMode.store(mode);
     
-    // End any active gesture when switching modes
-    if (automationGestureActive && mode != oldMode)
+    // Signal audio thread to end any active gesture (don't call endChangeGesture from UI thread)
+    if (automationGestureActive.load() && mode != oldMode)
     {
-        if (auto* param = apvts.getParameter(gainOutputParamId))
-        {
-            param->endChangeGesture();
-        }
-        automationGestureActive = false;
+        automationGestureNeedsEnd.store(true);
     }
     
     // Reset write active flag when switching modes
-    automationWriteActive = false;
+    automationWriteActive.store(false);
 }
 
 //==============================================================================
@@ -1259,6 +1495,17 @@ float VocalRiderAudioProcessor::calculateLufs(const float* samples, int numSampl
     
     lufsIntegrator += sumSquared;
     lufsSampleCount += numSamples;
+    
+    // Prevent unbounded accumulation: use ~3 second sliding window
+    // Reset when we exceed the window, preserving recent average
+    int maxLufsSamples = static_cast<int>(3.0 * currentSampleRate);
+    if (maxLufsSamples > 0 && lufsSampleCount > maxLufsSamples)
+    {
+        // Decay integrator to approximate sliding window
+        float ratio = static_cast<float>(maxLufsSamples) / static_cast<float>(lufsSampleCount);
+        lufsIntegrator *= ratio;
+        lufsSampleCount = maxLufsSamples;
+    }
     
     if (lufsSampleCount > 0)
     {
@@ -1408,19 +1655,39 @@ void VocalRiderAudioProcessor::loadPreset(int index)
         if (auto* param = apvts.getParameter(rangeParamId))
             param->setValueNotifyingHost(param->convertTo0to1(preset.range));
         
-        // Timing parameters
+        // Timing parameters (update both APVTS and atomics so processBlock sync doesn't overwrite)
+        if (auto* param = apvts.getParameter(attackParamId))
+            param->setValueNotifyingHost(param->convertTo0to1(preset.attackMs));
+        if (auto* param = apvts.getParameter(releaseParamId))
+            param->setValueNotifyingHost(param->convertTo0to1(preset.releaseMs));
+        if (auto* param = apvts.getParameter(holdParamId))
+            param->setValueNotifyingHost(param->convertTo0to1(preset.holdMs));
         attackMs.store(preset.attackMs);
         releaseMs.store(preset.releaseMs);
         holdMs.store(preset.holdMs);
         
-        // Toggle settings
+        // Toggle settings (update APVTS parameters)
+        if (auto* param = apvts.getParameter(naturalModeParamId))
+            param->setValueNotifyingHost(preset.naturalMode ? 1.0f : 0.0f);
+        if (auto* param = apvts.getParameter(smartSilenceParamId))
+            param->setValueNotifyingHost(preset.smartSilence ? 1.0f : 0.0f);
         naturalModeEnabled.store(preset.naturalMode);
         smartSilenceEnabled.store(preset.smartSilence);
         useLufsMode.store(preset.useLufs);
         
-        // Advanced knobs
+        // Advanced knobs (update APVTS parameters)
+        if (auto* param = apvts.getParameter(breathReductionParamId))
+            param->setValueNotifyingHost(param->convertTo0to1(preset.breathReduction));
+        if (auto* param = apvts.getParameter(transientPreservationParamId))
+            param->setValueNotifyingHost(param->convertTo0to1(preset.transientPreservation));
         breathReductionDb.store(preset.breathReduction);
         transientPreservation.store(preset.transientPreservation / 100.0f);  // Convert from % to 0-1
+        
+        // Noise floor: clamp to parameter range before setting APVTS
+        float nfClamped = juce::jmax(-60.0f, preset.noiseFloor);  // Parameter min is -60
+        if (auto* param = apvts.getParameter(noiseFloorParamId))
+            param->setValueNotifyingHost(param->convertTo0to1(nfClamped));
+        noiseFloorDb.store(nfClamped);
     }
 }
 
@@ -1443,9 +1710,174 @@ void VocalRiderAudioProcessor::resetToDefaults()
     breathReductionDb.store(0.0f);
     transientPreservation.store(0.0f);
     outputTrimDb.store(0.0f);
+    noiseFloorDb.store(-60.0f);
     lookAheadMode.store(0);
     useLufsMode.store(false);
     automationMode.store(AutomationMode::Off);  // Default to Off (internal gain calculation, no automation I/O)
+}
+
+//==============================================================================
+// User Presets
+
+juce::File VocalRiderAudioProcessor::getUserPresetsFolder()
+{
+    auto appData = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory);
+    #if JUCE_MAC
+    auto presetsDir = appData.getChildFile("Application Support").getChildFile("MBM Audio").getChildFile("magic.RIDE").getChildFile("User Presets");
+    #elif JUCE_WINDOWS
+    auto presetsDir = appData.getChildFile("MBM Audio").getChildFile("magic.RIDE").getChildFile("User Presets");
+    #else
+    auto presetsDir = appData.getChildFile("MBM Audio").getChildFile("magic.RIDE").getChildFile("User Presets");
+    #endif
+    presetsDir.createDirectory();
+    return presetsDir;
+}
+
+VocalRiderAudioProcessor::Preset VocalRiderAudioProcessor::getCurrentSettingsAsPreset(const juce::String& name) const
+{
+    Preset p;
+    p.category = "User";
+    p.name = name;
+    p.targetLevel = apvts.getRawParameterValue(targetLevelParamId)->load();
+    p.speed = apvts.getRawParameterValue(speedParamId)->load();
+    p.range = apvts.getRawParameterValue(rangeParamId)->load();
+    p.attackMs = attackMs.load();
+    p.releaseMs = releaseMs.load();
+    p.holdMs = holdMs.load();
+    p.naturalMode = naturalModeEnabled.load();
+    p.smartSilence = smartSilenceEnabled.load();
+    p.useLufs = useLufsMode.load();
+    p.breathReduction = breathReductionDb.load();
+    p.transientPreservation = transientPreservation.load() * 100.0f;  // Convert from 0-1 to %
+    p.noiseFloor = noiseFloorDb.load();
+    p.lookAheadMode = lookAheadMode.load();
+    p.outputTrim = outputTrimDb.load();
+    return p;
+}
+
+bool VocalRiderAudioProcessor::saveUserPreset(const juce::String& name)
+{
+    auto preset = getCurrentSettingsAsPreset(name);
+    auto folder = getUserPresetsFolder();
+    
+    // Sanitize filename
+    juce::String safeName = name.replaceCharacters("\\/:*?\"<>|", "_________");
+    auto file = folder.getChildFile(safeName + ".xml");
+    
+    auto xml = std::make_unique<juce::XmlElement>("UserPreset");
+    xml->setAttribute("name", preset.name);
+    xml->setAttribute("targetLevel", static_cast<double>(preset.targetLevel));
+    xml->setAttribute("speed", static_cast<double>(preset.speed));
+    xml->setAttribute("range", static_cast<double>(preset.range));
+    xml->setAttribute("attackMs", static_cast<double>(preset.attackMs));
+    xml->setAttribute("releaseMs", static_cast<double>(preset.releaseMs));
+    xml->setAttribute("holdMs", static_cast<double>(preset.holdMs));
+    xml->setAttribute("naturalMode", preset.naturalMode);
+    xml->setAttribute("smartSilence", preset.smartSilence);
+    xml->setAttribute("useLufs", preset.useLufs);
+    xml->setAttribute("breathReduction", static_cast<double>(preset.breathReduction));
+    xml->setAttribute("transientPreservation", static_cast<double>(preset.transientPreservation));
+    xml->setAttribute("noiseFloor", static_cast<double>(preset.noiseFloor));
+    xml->setAttribute("lookAheadMode", preset.lookAheadMode);
+    xml->setAttribute("outputTrim", static_cast<double>(preset.outputTrim));
+    
+    return xml->writeTo(file);
+}
+
+bool VocalRiderAudioProcessor::deleteUserPreset(const juce::String& name)
+{
+    auto folder = getUserPresetsFolder();
+    juce::String safeName = name.replaceCharacters("\\/:*?\"<>|", "_________");
+    auto file = folder.getChildFile(safeName + ".xml");
+    return file.deleteFile();
+}
+
+std::vector<VocalRiderAudioProcessor::Preset> VocalRiderAudioProcessor::loadUserPresets()
+{
+    std::vector<Preset> userPresets;
+    auto folder = getUserPresetsFolder();
+    
+    for (const auto& file : folder.findChildFiles(juce::File::findFiles, false, "*.xml"))
+    {
+        auto xml = juce::XmlDocument::parse(file);
+        if (xml != nullptr && xml->getTagName() == "UserPreset")
+        {
+            Preset p;
+            p.category = "User";
+            p.name = xml->getStringAttribute("name", file.getFileNameWithoutExtension());
+            p.targetLevel = static_cast<float>(xml->getDoubleAttribute("targetLevel", -18.0));
+            p.speed = static_cast<float>(xml->getDoubleAttribute("speed", 50.0));
+            p.range = static_cast<float>(xml->getDoubleAttribute("range", 6.0));
+            p.attackMs = static_cast<float>(xml->getDoubleAttribute("attackMs", 50.0));
+            p.releaseMs = static_cast<float>(xml->getDoubleAttribute("releaseMs", 200.0));
+            p.holdMs = static_cast<float>(xml->getDoubleAttribute("holdMs", 50.0));
+            p.naturalMode = xml->getBoolAttribute("naturalMode", true);
+            p.smartSilence = xml->getBoolAttribute("smartSilence", false);
+            p.useLufs = xml->getBoolAttribute("useLufs", false);
+            p.breathReduction = static_cast<float>(xml->getDoubleAttribute("breathReduction", 0.0));
+            p.transientPreservation = static_cast<float>(xml->getDoubleAttribute("transientPreservation", 0.0));
+            p.noiseFloor = static_cast<float>(xml->getDoubleAttribute("noiseFloor", -100.0));
+            p.lookAheadMode = xml->getIntAttribute("lookAheadMode", 0);
+            p.outputTrim = static_cast<float>(xml->getDoubleAttribute("outputTrim", 0.0));
+            userPresets.push_back(p);
+        }
+    }
+    
+    // Sort alphabetically by name
+    std::sort(userPresets.begin(), userPresets.end(), [](const Preset& a, const Preset& b) {
+        return a.name.compareIgnoreCase(b.name) < 0;
+    });
+    
+    return userPresets;
+}
+
+void VocalRiderAudioProcessor::loadPresetFromData(const Preset& preset)
+{
+    // Main knobs
+    if (auto* param = apvts.getParameter(targetLevelParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(preset.targetLevel));
+    if (auto* param = apvts.getParameter(speedParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(preset.speed));
+    if (auto* param = apvts.getParameter(rangeParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(preset.range));
+    
+    // Timing parameters (update APVTS so processBlock sync doesn't overwrite)
+    if (auto* param = apvts.getParameter(attackParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(preset.attackMs));
+    if (auto* param = apvts.getParameter(releaseParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(preset.releaseMs));
+    if (auto* param = apvts.getParameter(holdParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(preset.holdMs));
+    attackMs.store(preset.attackMs);
+    releaseMs.store(preset.releaseMs);
+    holdMs.store(preset.holdMs);
+    
+    // Toggle settings (update APVTS parameters)
+    if (auto* param = apvts.getParameter(naturalModeParamId))
+        param->setValueNotifyingHost(preset.naturalMode ? 1.0f : 0.0f);
+    if (auto* param = apvts.getParameter(smartSilenceParamId))
+        param->setValueNotifyingHost(preset.smartSilence ? 1.0f : 0.0f);
+    naturalModeEnabled.store(preset.naturalMode);
+    smartSilenceEnabled.store(preset.smartSilence);
+    useLufsMode.store(preset.useLufs);
+    
+    // Advanced knobs (update APVTS parameters)
+    if (auto* param = apvts.getParameter(breathReductionParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(preset.breathReduction));
+    if (auto* param = apvts.getParameter(transientPreservationParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(preset.transientPreservation));
+    breathReductionDb.store(preset.breathReduction);
+    transientPreservation.store(preset.transientPreservation / 100.0f);
+    
+    // Noise floor: clamp to parameter range
+    float nfClamped = juce::jmax(-60.0f, preset.noiseFloor);
+    if (auto* param = apvts.getParameter(noiseFloorParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(nfClamped));
+    noiseFloorDb.store(nfClamped);
+    
+    // Extended settings
+    setLookAheadMode(preset.lookAheadMode);
+    setOutputTrim(preset.outputTrim);
 }
 
 //==============================================================================

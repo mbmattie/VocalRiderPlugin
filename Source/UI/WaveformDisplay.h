@@ -72,8 +72,29 @@ public:
 
     //==============================================================================
     // Natural Mode phrase state (for visual feedback)
-    void setNaturalModeEnabled(bool enabled) { naturalModeActive = enabled; }
-    void setInPhrase(bool inPhrase) { phraseActive = inPhrase; }
+    void setNaturalModeEnabled(bool enabled) 
+    { 
+        if (naturalModeActive != enabled) staticElementsChanged = true;
+        naturalModeActive = enabled; 
+    }
+    void setInPhrase(bool inPhrase) 
+    { 
+        if (phraseActive != inPhrase) staticElementsChanged = true;
+        phraseActive = inPhrase; 
+    }
+    
+    //==============================================================================
+    // Noise Floor visual indicator
+    void setNoiseFloorDb(float db) 
+    { 
+        float prev = noiseFloorDb.exchange(db);
+        if (std::abs(prev - db) > 0.1f) staticElementsChanged = true;
+    }
+    void setNoiseFloorActive(bool active) 
+    { 
+        if (noiseFloorActive != active) staticElementsChanged = true;
+        noiseFloorActive = active; 
+    }
     
     //==============================================================================
     // I/O Levels
@@ -127,6 +148,16 @@ private:
     void drawGainCurvePath(juce::Graphics& g);  // Draw smooth gain curve as path
 
     //==============================================================================
+    // Cached background image (noise texture + vignette - only regenerated on resize)
+    juce::Image cachedBackgroundImage;
+    bool backgroundNeedsRedraw = true;
+    void renderCachedBackground();
+    
+    // Cached static overlay (grid lines, target/range lines - regenerated when params change)
+    juce::Image cachedStaticOverlay;
+    bool staticOverlayNeedsRedraw = true;
+    void renderCachedStaticOverlay();
+    
     // Offscreen waveform image (scrolls continuously)
     juce::Image waveformImage;
     int imageWidth = 0;
@@ -148,8 +179,11 @@ private:
     
     // Pending sample data (queue for new columns)
     std::vector<SampleData> pendingData;
-    int pendingDataIndex = 0;
+    int pendingReadIndex = 0;     // Read cursor into pendingData (avoids O(n) erase)
     juce::SpinLock pendingLock;
+    
+    // Pre-allocated frame data buffer (avoids heap allocation every frame)
+    std::vector<SampleData> frameDataBuffer;
     
     // Areas
     juce::Rectangle<float> waveformArea;
@@ -189,9 +223,16 @@ private:
     int outputPeakHoldCounter = 0;
     static constexpr int peakHoldFrames = 60;
     
-    // Natural mode phrase indicator
-    bool naturalModeActive = false;
-    bool phraseActive = false;
+    // Natural mode phrase indicator (atomic: set from UI, read from paint/timer)
+    std::atomic<bool> naturalModeActive { false };
+    std::atomic<bool> phraseActive { false };
+    
+    // Noise floor indicator
+    std::atomic<float> noiseFloorDb { -100.0f };
+    std::atomic<bool> noiseFloorActive { false };
+    
+    // Flag: static elements (target/range/noise floor) changed, force repaint even without audio
+    std::atomic<bool> staticElementsChanged { false };  // Also triggers staticOverlayNeedsRedraw
     
     // RMS average for output meter
     float outputRmsDb = -100.0f;
@@ -222,19 +263,26 @@ private:
     std::atomic<float> avgGainDb { 0.0f };
     std::atomic<float> minGainDb { 0.0f };
     std::atomic<float> maxGainDb { 0.0f };
-    float gainAccumulator = 0.0f;
-    float gainMinTrack = 100.0f;
-    float gainMaxTrack = -100.0f;
-    int statsSampleCount = 0;
+    std::atomic<float> gainAccumulator { 0.0f };
+    std::atomic<float> gainMinTrack { 100.0f };
+    std::atomic<float> gainMaxTrack { -100.0f };
+    std::atomic<int> statsSampleCount { 0 };
     
     // Gain curve visibility
     float gainCurveOpacity = 0.0f;
-    bool hasActiveAudio = false;
-    int silenceSampleCount = 0;
+    std::atomic<bool> hasActiveAudio { false };
+    std::atomic<int> silenceSampleCount { 0 };
     
-    // Clipping detection
-    bool isClipping = false;
-    int clippingSampleCount = 0;
+    // Tail scrolling: keep scrolling after audio stops so old data scrolls off screen
+    int tailScrollFrames = 0;
+    static constexpr int maxTailScrollFrames = 300;  // ~10 seconds at 30Hz
+    
+    // RMS average bar for peak meter (FabFilter-style slower bar)
+    float rmsPeakBarDb = -100.0f;  // Slow-moving RMS average for display
+    
+    // Clipping detection (atomic: written from audio thread pushSamples, read from UI paint)
+    std::atomic<bool> isClipping { false };
+    std::atomic<int> clippingSampleCount { 0 };
 
     // Visual settings
     static constexpr float handleHitDistance = 12.0f;

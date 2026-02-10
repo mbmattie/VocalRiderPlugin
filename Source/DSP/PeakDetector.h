@@ -40,6 +40,9 @@ public:
     void setReleaseTime(float releaseMs);
 
 private:
+    /** Internal sample processing without atomic store (for use in processBlock). */
+    float processSampleInternal(float sample);
+    
     void updateCoefficients();
 
     double sampleRate = 44100.0;

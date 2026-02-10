@@ -50,10 +50,10 @@ private:
     float releaseTimeMs = 200.0f;
     float holdTimeMs = 0.0f;
     
-    float attackCoeff = 0.0f;
-    float releaseCoeff = 0.0f;
+    std::atomic<float> attackCoeff { 0.0f };
+    std::atomic<float> releaseCoeff { 0.0f };
     
-    int holdSamples = 0;
+    std::atomic<int> holdSamples { 0 };
     int holdCounter = 0;
     float lastTargetGainDb = 0.0f;
     

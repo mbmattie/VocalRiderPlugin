@@ -14,6 +14,7 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <atomic>
 
 class LevelMeter : public juce::Component,
                    public juce::Timer
@@ -64,7 +65,7 @@ private:
     //==============================================================================
     MeterType meterType;
 
-    float currentLevelDb = -100.0f;
+    std::atomic<float> currentLevelDb { -100.0f };
     float displayLevelDb = -100.0f;
     float peakLevelDb = -100.0f;
 

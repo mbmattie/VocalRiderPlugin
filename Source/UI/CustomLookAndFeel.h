@@ -40,12 +40,20 @@ public:
     
     static juce::Font getPluginFont(float size, bool bold = false) 
     { 
-        return juce::Font(juce::FontOptions(getFontName(), size, bold ? juce::Font::bold : juce::Font::plain));
+        auto font = juce::Font(juce::FontOptions(getFontName(), size, bold ? juce::Font::bold : juce::Font::plain));
+        // Fallback to system default if font not found (older macOS, missing fonts)
+        if (font.getTypefaceName() != getFontName())
+            return juce::Font(juce::FontOptions(size).withStyle(bold ? "Bold" : "Regular"));
+        return font;
     }
     
     static juce::Font getBrandFont(float size, bool bold = true) 
     { 
-        return juce::Font(juce::FontOptions(getBrandFontName(), size, bold ? juce::Font::bold : juce::Font::plain));
+        auto font = juce::Font(juce::FontOptions(getBrandFontName(), size, bold ? juce::Font::bold : juce::Font::plain));
+        // Fallback to system default if font not found
+        if (font.getTypefaceName() != getBrandFontName())
+            return juce::Font(juce::FontOptions(size).withStyle(bold ? "Bold" : "Regular"));
+        return font;
     }
 
     void drawButtonBackground(juce::Graphics& g, juce::Button& button,

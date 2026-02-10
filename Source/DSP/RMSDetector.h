@@ -61,6 +61,9 @@ public:
 
 private:
     //==============================================================================
+    /** Internal sample processing without atomic store (for use in processBlock). */
+    float processSampleInternal(float sample);
+    
     void updateBufferSize();
     float calculateRmsDb() const;
 
@@ -70,6 +73,7 @@ private:
 
     std::vector<float> squaredBuffer;
     int bufferSize = 0;
+    int maxBufferSize = 0;  // Pre-allocated capacity (avoids realloc on audio thread)
     int writeIndex = 0;
     float runningSum = 0.0f;
 

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(VocalRider VERSION 1.0.0)
+project(VocalRider VERSION 1.1.1)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)

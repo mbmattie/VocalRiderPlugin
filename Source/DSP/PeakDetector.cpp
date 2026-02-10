@@ -53,7 +53,7 @@ void PeakDetector::setReleaseTime(float releaseMs)
     updateCoefficients();
 }
 
-float PeakDetector::processSample(float sample)
+float PeakDetector::processSampleInternal(float sample)
 {
     float absSample = std::abs(sample);
     
@@ -68,9 +68,17 @@ float PeakDetector::processSample(float sample)
         envelope = releaseCoeff * envelope + (1.0f - releaseCoeff) * absSample;
     }
     
-    float db = juce::Decibels::gainToDecibels(envelope, minDbLevel);
-    currentLevelDb.store(db);
+    // Snap to zero to prevent denormal CPU spikes on older Intel hardware
+    if (envelope < 1.0e-15f)
+        envelope = 0.0f;
     
+    return juce::Decibels::gainToDecibels(envelope, minDbLevel);
+}
+
+float PeakDetector::processSample(float sample)
+{
+    float db = processSampleInternal(sample);
+    currentLevelDb.store(db);
     return db;
 }
 
@@ -80,8 +88,11 @@ float PeakDetector::processBlock(const float* samples, int numSamples)
     
     for (int i = 0; i < numSamples; ++i)
     {
-        levelDb = processSample(samples[i]);
+        levelDb = processSampleInternal(samples[i]);
     }
+    
+    // Single atomic store at end of block (not per-sample)
+    currentLevelDb.store(levelDb);
     
     return levelDb;
 }

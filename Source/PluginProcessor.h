@@ -44,6 +44,7 @@ public:
     bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
 
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    void processBlockBypassed(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     //==============================================================================
     juce::AudioProcessorEditor* createEditor() override;
@@ -101,7 +102,7 @@ public:
     // Natural Mode (phrase-based processing)
     void setNaturalModeEnabled(bool enabled);
     bool isNaturalModeEnabled() const { return naturalModeEnabled.load(); }
-    bool isInPhrase() const { return inPhrase; }  // For visual feedback
+    bool isInPhrase() const { return inPhrase.load(); }  // For visual feedback (atomic for thread safety)
     
     // Smart Silence (silence reduction)
     void setSmartSilenceEnabled(bool enabled) { smartSilenceEnabled.store(enabled); }
@@ -127,6 +128,10 @@ public:
     // Output trim (makeup gain)
     void setOutputTrim(float trimDb);
     float getOutputTrim() const { return outputTrimDb.load(); }
+    
+    // Noise floor threshold
+    void setNoiseFloor(float thresholdDb);
+    float getNoiseFloor() const { return noiseFloorDb.load(); }
     
     // Sidechain control (reference track matching)
     void setSidechainEnabled(bool enabled) { sidechainEnabled.store(enabled); }
@@ -190,12 +195,24 @@ public:
         bool useLufs;
         float breathReduction;      // 0-12 dB
         float transientPreservation; // 0-100%
+        float noiseFloor;           // -100 = off, -60 to -20 dB
+        // Extended fields for user presets (factory presets use defaults)
+        int lookAheadMode = 0;      // 0=Off, 1=10ms, 2=20ms, 3=30ms
+        float outputTrim = 0.0f;    // -12 to +12 dB
     };
     
     static const std::vector<Preset>& getFactoryPresets();
     static std::vector<juce::String> getPresetCategories();
     void loadPreset(int index);
+    void loadPresetFromData(const Preset& preset);
     void resetToDefaults();
+    
+    // User presets (saved to disk)
+    static juce::File getUserPresetsFolder();
+    static std::vector<Preset> loadUserPresets();
+    bool saveUserPreset(const juce::String& name);
+    bool deleteUserPreset(const juce::String& name);
+    Preset getCurrentSettingsAsPreset(const juce::String& name) const;
 
     //==============================================================================
     // Parameter IDs
@@ -213,6 +230,7 @@ public:
     static const juce::String naturalModeParamId;
     static const juce::String smartSilenceParamId;
     static const juce::String outputTrimParamId;
+    static const juce::String noiseFloorParamId;
 
     //==============================================================================
     // Audio file playback (for standalone testing)
@@ -287,7 +305,8 @@ private:
     int learningSamples = 0;
     float learningPeakSum = 0.0f;
     
-    bool inPhrase = false;
+    std::atomic<bool> inPhrase { false };
+    std::atomic<bool> phraseStateNeedsReset { false };  // Flag for thread-safe reset
     float phraseAccumulator = 0.0f;
     int phraseSampleCount = 0;
     float currentPhraseGainDb = 0.0f;
@@ -297,6 +316,7 @@ private:
     int silenceMinSamples = 0;
     float phraseGainSmoother = 0.0f;
     static constexpr float phraseGainSmoothCoeff = 0.9995f;
+    int processorSilenceBlockCount = 0;  // Counter for silent processBlock calls
     
     // Intelligent phrase boundary detection
     float phraseLastLevelDb = -100.0f;  // For energy delta tracking
@@ -311,6 +331,7 @@ private:
     //==============================================================================
     // LUFS measurement
     std::atomic<bool> useLufsMode { false };
+    std::atomic<bool> lufsNeedsReset { false };  // Signal audio thread to reset LUFS state
     std::atomic<float> inputLufs { -100.0f };
     float lufsIntegrator = 0.0f;
     int lufsSampleCount = 0;
@@ -332,6 +353,10 @@ private:
     std::atomic<float> outputTrimDb { 0.0f };  // -12 to +12 dB
     
     //==============================================================================
+    // Noise floor threshold (signals below this are ignored)
+    std::atomic<float> noiseFloorDb { -100.0f };  // -100 = off, -60 to -20 dB active range
+    
+    //==============================================================================
     // Sidechain (reference track matching)
     std::atomic<bool> sidechainEnabled { false };
     std::atomic<float> sidechainAmount { 50.0f };  // 0-100% blend with sidechain level
@@ -350,8 +375,9 @@ private:
     std::atomic<AutomationMode> automationMode { AutomationMode::Off };  // Default to Off
     std::atomic<float> gainOutputParam { 0.0f };
     std::atomic<float>* gainOutputParamPtr = nullptr;
-    bool automationWriteActive = false;
-    bool automationGestureActive = false;  // Track if we've called beginChangeGesture()
+    std::atomic<bool> automationWriteActive { false };
+    std::atomic<bool> automationGestureActive { false };
+    std::atomic<bool> automationGestureNeedsEnd { false };  // Signal audio thread to end gesture
 
     // Cached parameters
     std::atomic<float>* targetLevelParam = nullptr;
@@ -367,36 +393,44 @@ private:
     std::atomic<float>* naturalModeParam = nullptr;
     std::atomic<float>* smartSilenceParam = nullptr;
     std::atomic<float>* outputTrimParam = nullptr;
+    std::atomic<float>* noiseFloorParam = nullptr;
     
     // Smoothed parameters (to prevent clicks/pops on rapid changes)
     float smoothedTargetLevel = -18.0f;
     float smoothedRange = 6.0f;  // Default 6dB range
-    static constexpr float paramSmoothingCoeff = 0.85f;  // ~3ms at 44.1kHz - very fast response
+    float paramSmoothingCoeff = 0.85f;  // Computed from sample rate in prepareToPlay (~3ms)
 
     // Metering values (for UI)
     std::atomic<float> inputLevelDb { -100.0f };
     std::atomic<float> outputLevelDb { -100.0f };
     std::atomic<float> currentGainDb { 0.0f };
 
-    // Speed tracking
+    // Speed / parameter tracking (avoid redundant coefficient updates)
     float lastSpeed = -1.0f;
+    float lastAttackMs = -1.0f;
+    float lastReleaseMs = -1.0f;
+    float lastHoldMs = -1.0f;
 
-    // Waveform display (non-owning pointer, set by editor) - atomic for thread safety
+    // Waveform display (non-owning pointer, set by editor) - atomic for thread safety.
+    // IMPORTANT: Editor MUST call setWaveformDisplay(nullptr) in its destructor BEFORE
+    // the WaveformDisplay is destroyed, to prevent use-after-free on the audio thread.
     std::atomic<WaveformDisplay*> waveformDisplay { nullptr };
 
     // Soft limiter
     static constexpr float ceilingDb = -0.3f;
-    float ceilingLinear = 0.966f;
+    // Derived: 10^(ceilingDb/20) -- keep in sync automatically
+    const float ceilingLinear = std::pow(10.0f, ceilingDb / 20.0f);  // ~0.966
 
     //==============================================================================
     // Look-ahead buffer
     std::atomic<int> lookAheadMode { 0 };
-    int lookAheadSamples = 0;
+    std::atomic<int> lookAheadSamples { 0 };
     int maxLookAheadSamples = 0;
     juce::AudioBuffer<float> lookAheadDelayBuffer;
     std::vector<float> lookAheadGainBuffer;
     int lookAheadWritePos = 0;
     bool lookAheadBufferFilled = false;
+    std::atomic<bool> lookAheadNeedsClear { false };  // Set by processBlockBypassed
     
     void updateLookAheadSamples();
 
@@ -409,10 +443,24 @@ private:
     //==============================================================================
     // Auto-calibrate
     std::atomic<bool> autoCalibrating { false };
+    std::atomic<bool> autoCalibrateNeedsReset { false };  // Signal audio thread to reset
     float autoCalibrateAccumulator = 0.0f;
     int autoCalibrateSampleCount = 0;
     static constexpr float autoCalibrateSeconds = 2.5f;
     double currentSampleRate = 44100.0;
+    
+
+    //==============================================================================
+    // Pre-allocated scratch buffers for processBlock (avoid heap allocs on audio thread)
+    juce::AudioBuffer<float> scratchMonoBuffer;
+    juce::AudioBuffer<float> scratchFilteredBuffer;
+    juce::AudioBuffer<float> scratchSidechainBuffer;
+    std::vector<float> scratchInputSamples;
+    std::vector<float> scratchGainSamples;
+    std::vector<float> scratchPeakAheadLevels;
+    std::vector<float> scratchPrecomputedGains;
+    std::vector<float> scratchOutputSamples;
+    int preparedBlockSize = 0;  // Track allocated size for overflow guard
 
     //==============================================================================
     #if JucePlugin_Build_Standalone

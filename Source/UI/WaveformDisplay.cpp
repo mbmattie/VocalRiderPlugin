@@ -18,7 +18,12 @@
 WaveformDisplay::WaveformDisplay()
 {
     lastFrameTime = juce::Time::getMillisecondCounterHiRes() / 1000.0;
-    startTimerHz(144);  // 144Hz for smooth scrolling at all sizes
+    
+    // Pre-allocate pendingData to avoid heap allocation on the audio thread
+    // (push_back into a full vector triggers realloc which is a real-time violation)
+    pendingData.reserve(2048);
+    
+    startTimerHz(30);  // 30Hz is plenty smooth and much lighter on CPU/GPU
 }
 
 WaveformDisplay::~WaveformDisplay()
@@ -38,6 +43,10 @@ void WaveformDisplay::resized()
     waveformArea = waveformArea.toNearestInt().toFloat();
     
     initializeWaveformImage();
+    
+    // Mark cached images for regeneration
+    backgroundNeedsRedraw = true;
+    staticOverlayNeedsRedraw = true;
 }
 
 void WaveformDisplay::initializeWaveformImage()
@@ -74,7 +83,7 @@ void WaveformDisplay::initializeWaveformImage()
         // Clear pending data
         juce::SpinLock::ScopedLockType lock(pendingLock);
         pendingData.clear();
-        pendingDataIndex = 0;
+        pendingReadIndex = 0;
     }
 }
 
@@ -83,8 +92,9 @@ void WaveformDisplay::initializeWaveformImage()
 
 float WaveformDisplay::linearToLogY(float linear, float areaHeight) const
 {
-    if (linear <= 0.00001f) return areaHeight;
+    if (linear <= 0.00001f || !std::isfinite(linear)) return areaHeight;
     float db = 20.0f * std::log10(linear);
+    if (!std::isfinite(db)) return areaHeight;
     // Extended range: -64dB at bottom, +6dB at top (70dB total range)
     float normalized = (db - (-64.0f)) / (6.0f - (-64.0f));
     normalized = juce::jlimit(0.0f, 1.0f, normalized);
@@ -101,7 +111,9 @@ float WaveformDisplay::dbToY(float db) const
 
 float WaveformDisplay::yToDb(float y) const
 {
-    float normalized = (waveformArea.getBottom() - y) / waveformArea.getHeight();
+    float h = waveformArea.getHeight();
+    if (h < 1.0f) return -64.0f;
+    float normalized = (waveformArea.getBottom() - y) / h;
     normalized = juce::jlimit(0.0f, 1.0f, normalized);
     return -64.0f + normalized * (6.0f - (-64.0f));
 }
@@ -196,7 +208,7 @@ void WaveformDisplay::mouseDrag(const juce::MouseEvent& event)
         // Both range handles are connected - move both together
         float newRange = juce::jlimit(0.0f, 12.0f, dragStartValue + deltaDb);
         boostRangeDb.store(newRange);
-        cutRangeDb.store(newRange);  // Keep both in sync
+        cutRangeDb.store(newRange);
         if (onBoostRangeChanged) onBoostRangeChanged(newRange);
         if (onCutRangeChanged) onCutRangeChanged(newRange);
         if (onRangeChanged) onRangeChanged(newRange);
@@ -206,7 +218,7 @@ void WaveformDisplay::mouseDrag(const juce::MouseEvent& event)
         // Both range handles are connected - move both together
         float newRange = juce::jlimit(0.0f, 12.0f, dragStartValue - deltaDb);
         boostRangeDb.store(newRange);
-        cutRangeDb.store(newRange);  // Keep both in sync
+        cutRangeDb.store(newRange);
         if (onBoostRangeChanged) onBoostRangeChanged(newRange);
         if (onCutRangeChanged) onCutRangeChanged(newRange);
         if (onRangeChanged) onRangeChanged(newRange);
@@ -238,7 +250,9 @@ void WaveformDisplay::mouseMove(const juce::MouseEvent& event)
 
 void WaveformDisplay::setTargetLevel(float targetDb)
 {
-    targetLevelDb.store(juce::jlimit(-40.0f, 0.0f, targetDb));
+    float clamped = juce::jlimit(-40.0f, 0.0f, targetDb);
+    float prev = targetLevelDb.exchange(clamped);
+    if (std::abs(prev - clamped) > 0.1f) staticElementsChanged = true;
 }
 
 void WaveformDisplay::setBoostRange(float db)
@@ -254,8 +268,9 @@ void WaveformDisplay::setCutRange(float db)
 void WaveformDisplay::setRange(float rangeDb)
 {
     float clamped = juce::jlimit(0.0f, 12.0f, rangeDb);
-    boostRangeDb.store(clamped);
+    float prev = boostRangeDb.exchange(clamped);
     cutRangeDb.store(clamped);
+    if (std::abs(prev - clamped) > 0.1f) staticElementsChanged = true;
 }
 
 void WaveformDisplay::setGainStats(float avg, float min, float max)
@@ -270,10 +285,10 @@ void WaveformDisplay::resetStats()
     avgGainDb.store(0.0f);
     minGainDb.store(0.0f);
     maxGainDb.store(0.0f);
-    gainAccumulator = 0.0f;
-    gainMinTrack = 100.0f;
-    gainMaxTrack = -100.0f;
-    statsSampleCount = 0;
+    gainAccumulator.store(0.0f);
+    gainMinTrack.store(100.0f);
+    gainMaxTrack.store(-100.0f);
+    statsSampleCount.store(0);
 }
 
 void WaveformDisplay::clear()
@@ -289,6 +304,11 @@ void WaveformDisplay::clear()
     isClipping = false;
     hasLastDrawnData = false;
     lastDrawnData = SampleData();
+    {
+        juce::SpinLock::ScopedLockType lock(pendingLock);
+        pendingData.clear();
+        pendingReadIndex = 0;
+    }
     resetStats();
 }
 
@@ -298,6 +318,9 @@ void WaveformDisplay::clear()
 void WaveformDisplay::pushSamples(const float* inputSamples, const float* outputSamples,
                                    const float* gainValues, int numSamples)
 {
+    if (inputSamples == nullptr || gainValues == nullptr || numSamples <= 0)
+        return;
+    
     bool hadClip = false;
     
     for (int i = 0; i < numSamples; ++i)
@@ -316,9 +339,9 @@ void WaveformDisplay::pushSamples(const float* inputSamples, const float* output
         if (outAbs > 0.99f) hadClip = true;
 
         float gain = gainValues[i];
-        gainAccumulator += gain;
-        gainMinTrack = juce::jmin(gainMinTrack, gain);
-        gainMaxTrack = juce::jmax(gainMaxTrack, gain);
+        gainAccumulator.store(gainAccumulator.load() + gain);
+        gainMinTrack.store(juce::jmin(gainMinTrack.load(), gain));
+        gainMaxTrack.store(juce::jmax(gainMaxTrack.load(), gain));
         statsSampleCount++;
 
         if (inAbs > 0.001f)
@@ -329,13 +352,11 @@ void WaveformDisplay::pushSamples(const float* inputSamples, const float* output
         else
         {
             silenceSampleCount++;
-            // Very fast silence detection (~30ms at 44.1kHz) for immediate stop response
+            // Silence detection (~30ms at 44.1kHz) - mark inactive but don't clear queue
+            // The display will continue scrolling via tail frames to gracefully clear
             if (silenceSampleCount > 1323)
             {
                 hasActiveAudio = false;
-                // Clear pending data queue immediately when silence detected
-                juce::SpinLock::ScopedLockType lock(pendingLock);
-                pendingData.clear();
             }
         }
 
@@ -355,10 +376,18 @@ void WaveformDisplay::pushSamples(const float* inputSamples, const float* output
             {
                 juce::SpinLock::ScopedLockType lock(pendingLock);
                 pendingData.push_back(data);
-                // Limit queue size to prevent delay buildup
-                while (pendingData.size() > 50)
+                // Limit queue size to prevent delay buildup (use read index, no O(n) erase)
+                int unread = static_cast<int>(pendingData.size()) - pendingReadIndex;
+                if (unread > 50)
                 {
-                    pendingData.erase(pendingData.begin());
+                    // Skip old unread data to keep up with real-time
+                    pendingReadIndex = static_cast<int>(pendingData.size()) - 50;
+                }
+                // Compact when fully consumed and vector is large
+                if (pendingReadIndex > 0 && pendingReadIndex >= static_cast<int>(pendingData.size()))
+                {
+                    pendingData.clear();
+                    pendingReadIndex = 0;
                 }
             }
 
@@ -385,11 +414,11 @@ void WaveformDisplay::pushSamples(const float* inputSamples, const float* output
             isClipping = false;
     }
 
-    if (statsSampleCount > 0)
+    if (statsSampleCount.load() > 0)
     {
-        avgGainDb.store(gainAccumulator / static_cast<float>(statsSampleCount));
-        minGainDb.store(gainMinTrack);
-        maxGainDb.store(gainMaxTrack);
+        avgGainDb.store(gainAccumulator.load() / static_cast<float>(statsSampleCount.load()));
+        minGainDb.store(gainMinTrack.load());
+        maxGainDb.store(gainMaxTrack.load());
     }
     
     if (numSamples > 0)
@@ -409,15 +438,19 @@ void WaveformDisplay::shiftWaveformImage(int pixels)
     
     // Helper lambda to shift a buffer left
     auto shiftBuffer = [&](std::vector<float>& buffer, float fillValue) {
-        if (!buffer.empty() && pixels < static_cast<int>(buffer.size()))
+        if (buffer.empty()) return;
+        if (pixels >= static_cast<int>(buffer.size()))
         {
-            std::memmove(buffer.data(), 
-                         buffer.data() + pixels, 
-                         (buffer.size() - static_cast<size_t>(pixels)) * sizeof(float));
-            for (size_t i = buffer.size() - static_cast<size_t>(pixels); i < buffer.size(); ++i)
-            {
-                buffer[i] = fillValue;
-            }
+            // Entire buffer is stale - fill with default value
+            std::fill(buffer.begin(), buffer.end(), fillValue);
+            return;
+        }
+        std::memmove(buffer.data(), 
+                     buffer.data() + pixels, 
+                     (buffer.size() - static_cast<size_t>(pixels)) * sizeof(float));
+        for (size_t i = buffer.size() - static_cast<size_t>(pixels); i < buffer.size(); ++i)
+        {
+            buffer[i] = fillValue;
         }
     };
     
@@ -560,13 +593,13 @@ void WaveformDisplay::drawGainCurvePath(juce::Graphics& g)
     
     if (avgGain > 0.2f)
     {
-        float t = juce::jmin(1.0f, avgGain / boost);
+        float t = (boost > 0.001f) ? juce::jmin(1.0f, avgGain / boost) : 1.0f;
         glowColour = neutralGlowColour.interpolatedWith(aboveGlowColour, t);
         glowIntensity = 0.3f + t * 0.4f;
     }
     else if (avgGain < -0.2f)
     {
-        float t = juce::jmin(1.0f, std::abs(avgGain) / cut);
+        float t = (cut > 0.001f) ? juce::jmin(1.0f, std::abs(avgGain) / cut) : 1.0f;
         glowColour = neutralGlowColour.interpolatedWith(belowGlowColour, t);
         glowIntensity = 0.3f + t * 0.4f;
     }
@@ -611,16 +644,12 @@ void WaveformDisplay::drawGainCurvePath(juce::Graphics& g)
         juce::Colour segmentColour;
         if (midGain > 0.1f)
         {
-            // Above target = boosting = cyan
-            // More saturated cyan the further above target (up to boost range)
-            float t = juce::jlimit(0.0f, 1.0f, midGain / boost);
+            float t = (boost > 0.001f) ? juce::jlimit(0.0f, 1.0f, midGain / boost) : 1.0f;
             segmentColour = neutralColour.interpolatedWith(topColour, t);
         }
         else if (midGain < -0.1f)
         {
-            // Below target = cutting = purple
-            // More saturated purple the further below target (down to cut range)
-            float t = juce::jlimit(0.0f, 1.0f, std::abs(midGain) / cut);
+            float t = (cut > 0.001f) ? juce::jlimit(0.0f, 1.0f, std::abs(midGain) / cut) : 1.0f;
             segmentColour = neutralColour.interpolatedWith(bottomColour, t);
         }
         else
@@ -865,17 +894,48 @@ void WaveformDisplay::timerCallback()
 {
     if (waveformImage.isNull() || imageWidth <= 0) 
     {
-        repaint();
-        return;
+        return;  // Don't repaint if nothing to draw
     }
     
-    // Calculate time delta
+    // Always update lastFrameTime to prevent time jumps after idle periods
     double currentTime = juce::Time::getMillisecondCounterHiRes() / 1000.0;
     double deltaTime = currentTime - lastFrameTime;
     lastFrameTime = currentTime;
     
-    // Clamp delta to avoid large jumps
-    deltaTime = juce::jmin(deltaTime, 0.025);
+    // Clamp delta to avoid large jumps (e.g., after returning from idle)
+    deltaTime = juce::jmin(deltaTime, 0.04);
+    
+    // Check if we have any pending audio data
+    bool hasPendingData = false;
+    {
+        juce::SpinLock::ScopedLockType lock(pendingLock);
+        hasPendingData = (pendingReadIndex < static_cast<int>(pendingData.size()));
+    }
+    
+    // Manage tail scrolling: when audio stops, keep scrolling to clear display
+    if (hasActiveAudio || hasPendingData)
+    {
+        tailScrollFrames = maxTailScrollFrames;  // Reset tail timer when audio is active
+    }
+    else if (tailScrollFrames > 0)
+    {
+        tailScrollFrames--;
+    }
+    
+    // If static elements (noise floor, target, range) changed, regenerate cached overlay
+    if (staticElementsChanged)
+    {
+        staticElementsChanged = false;
+        staticOverlayNeedsRedraw = true;
+        repaint();
+        // Still continue to check if we should do full scroll update
+    }
+    
+    // Skip scroll/animation update if truly idle (no audio, no tail scroll, fully faded)
+    if (!hasPendingData && !hasActiveAudio && tailScrollFrames <= 0 && gainCurveOpacity < 0.01f)
+    {
+        return;  // Nothing to animate - save CPU/GPU
+    }
     
     // Fixed pixels per second - same visual speed at all display sizes
     // Larger displays show more time, smaller displays show less time
@@ -893,17 +953,36 @@ void WaveformDisplay::timerCallback()
         // Shift image left
         shiftWaveformImage(pixelsToScroll);
         
-        // Get pending data
-        std::vector<SampleData> frameData;
+        // Get pending data (O(1) read via index - no erase/shift)
+        frameDataBuffer.clear();
         {
             juce::SpinLock::ScopedLockType lock(pendingLock);
-            // Take only as much data as we need for the pixels we're drawing
-            while (!pendingData.empty() && frameData.size() < static_cast<size_t>(pixelsToScroll * 2))
+            size_t available = pendingData.size() - static_cast<size_t>(pendingReadIndex);
+            size_t needed = static_cast<size_t>(pixelsToScroll * 2);
+            size_t toTake = juce::jmin(available, needed);
+            
+            if (toTake > 0)
             {
-                frameData.push_back(pendingData.front());
-                pendingData.erase(pendingData.begin());
+                frameDataBuffer.assign(
+                    pendingData.begin() + pendingReadIndex,
+                    pendingData.begin() + pendingReadIndex + static_cast<int>(toTake));
+                pendingReadIndex += static_cast<int>(toTake);
+            }
+            
+            // Compact the vector when fully consumed (amortized O(1))
+            if (pendingReadIndex >= static_cast<int>(pendingData.size()))
+            {
+                pendingData.clear();
+                pendingReadIndex = 0;
+            }
+            // Also compact when read index is large (prevent unbounded growth)
+            else if (pendingReadIndex > 1024)
+            {
+                pendingData.erase(pendingData.begin(), pendingData.begin() + pendingReadIndex);
+                pendingReadIndex = 0;
             }
         }
+        auto& frameData = frameDataBuffer;
         
         // Draw new columns on the right
         for (int p = 0; p < pixelsToScroll; ++p)
@@ -958,7 +1037,7 @@ void WaveformDisplay::timerCallback()
     // Decay gain display when no audio
     {
         juce::SpinLock::ScopedLockType lock(pendingLock);
-        if (pendingData.empty())
+        if (pendingReadIndex >= static_cast<int>(pendingData.size()))
         {
             float gain = currentGainDb.load();
             gain *= 0.9f;
@@ -985,10 +1064,14 @@ void WaveformDisplay::paint(juce::Graphics& g)
     if (waveformImage.isNull())
         return;
     
-    drawGridLines(g);
-    drawTargetAndRangeLines(g);  // Draw behind waveforms
+    // Use cached static overlay (grid + target/range lines - regenerated when params change)
+    if (staticOverlayNeedsRedraw || cachedStaticOverlay.isNull())
+        renderCachedStaticOverlay();
     
-    // Draw Natural Mode phrase indicator
+    if (!cachedStaticOverlay.isNull())
+        g.drawImageAt(cachedStaticOverlay, 0, 0);
+    
+    // Draw Natural Mode phrase indicator (dynamic - changes per frame)
     if (naturalModeActive)
     {
         drawPhraseIndicator(g);
@@ -1014,21 +1097,27 @@ void WaveformDisplay::paint(juce::Graphics& g)
 }
 
 //==============================================================================
-// Static drawing functions (drawn fresh each frame)
+// Cached rendering
 
-void WaveformDisplay::drawBackground(juce::Graphics& g)
+void WaveformDisplay::renderCachedBackground()
 {
-    auto bounds = getLocalBounds().toFloat();
+    auto bounds = getLocalBounds();
+    if (bounds.isEmpty()) return;
+    
+    cachedBackgroundImage = juce::Image(juce::Image::ARGB, bounds.getWidth(), bounds.getHeight(), true);
+    juce::Graphics g(cachedBackgroundImage);
+    
+    auto boundsF = bounds.toFloat();
     
     g.setColour(juce::Colour(0xFF252830));
-    g.fillRect(bounds);
+    g.fillRect(boundsF);
     
-    // Subtle noise texture
+    // Subtle noise texture (rendered once, not per frame)
     juce::Random rng(42);
     int step = 3;
-    for (int y = static_cast<int>(bounds.getY()); y < static_cast<int>(bounds.getBottom()); y += step)
+    for (int y = static_cast<int>(boundsF.getY()); y < static_cast<int>(boundsF.getBottom()); y += step)
     {
-        for (int x = static_cast<int>(bounds.getX()); x < static_cast<int>(bounds.getRight()); x += step)
+        for (int x = static_cast<int>(boundsF.getX()); x < static_cast<int>(boundsF.getRight()); x += step)
         {
             float noise = rng.nextFloat();
             if (noise > 0.7f)
@@ -1047,22 +1136,51 @@ void WaveformDisplay::drawBackground(juce::Graphics& g)
     }
     
     // Vignette effects
-    float vignetteWidth = bounds.getWidth() * 0.2f;
+    float vignetteWidth = boundsF.getWidth() * 0.2f;
     juce::ColourGradient leftVig(
-        juce::Colour(0x70000000), bounds.getX(), bounds.getCentreY(),
-        juce::Colours::transparentBlack, bounds.getX() + vignetteWidth, bounds.getCentreY(),
+        juce::Colour(0x70000000), boundsF.getX(), boundsF.getCentreY(),
+        juce::Colours::transparentBlack, boundsF.getX() + vignetteWidth, boundsF.getCentreY(),
         false
     );
     g.setGradientFill(leftVig);
-    g.fillRect(bounds.getX(), bounds.getY(), vignetteWidth, bounds.getHeight());
+    g.fillRect(boundsF.getX(), boundsF.getY(), vignetteWidth, boundsF.getHeight());
     
     juce::ColourGradient rightVig(
-        juce::Colours::transparentBlack, bounds.getRight() - vignetteWidth, bounds.getCentreY(),
-        juce::Colour(0x70000000), bounds.getRight(), bounds.getCentreY(),
+        juce::Colours::transparentBlack, boundsF.getRight() - vignetteWidth, boundsF.getCentreY(),
+        juce::Colour(0x70000000), boundsF.getRight(), boundsF.getCentreY(),
         false
     );
     g.setGradientFill(rightVig);
-    g.fillRect(bounds.getRight() - vignetteWidth, bounds.getY(), vignetteWidth, bounds.getHeight());
+    g.fillRect(boundsF.getRight() - vignetteWidth, boundsF.getY(), vignetteWidth, boundsF.getHeight());
+    
+    backgroundNeedsRedraw = false;
+}
+
+void WaveformDisplay::renderCachedStaticOverlay()
+{
+    auto bounds = getLocalBounds();
+    if (bounds.isEmpty()) return;
+    
+    cachedStaticOverlay = juce::Image(juce::Image::ARGB, bounds.getWidth(), bounds.getHeight(), true);
+    juce::Graphics g(cachedStaticOverlay);
+    
+    drawGridLines(g);
+    drawTargetAndRangeLines(g);
+    
+    staticOverlayNeedsRedraw = false;
+}
+
+//==============================================================================
+// Static drawing functions
+
+void WaveformDisplay::drawBackground(juce::Graphics& g)
+{
+    // Use cached background image (regenerated only on resize)
+    if (backgroundNeedsRedraw || cachedBackgroundImage.isNull())
+        renderCachedBackground();
+    
+    if (!cachedBackgroundImage.isNull())
+        g.drawImageAt(cachedBackgroundImage, 0, 0);
 }
 
 void WaveformDisplay::drawGridLines(juce::Graphics& g)
@@ -1082,16 +1200,16 @@ void WaveformDisplay::drawGridLines(juce::Graphics& g)
     }
     
     // dB labels on right side
-    float labelX = waveformArea.getRight() - 28.0f;
+    float labelX = waveformArea.getRight() - 32.0f;
     
-    g.setFont(CustomLookAndFeel::getPluginFont(9.0f, false));
+    g.setFont(CustomLookAndFeel::getPluginFont(11.0f, false));
     g.setColour(juce::Colour(0xFFCCCCCC).withAlpha(0.9f));
     
     for (float db : dbLevels)
     {
         float y = dbToY(db);
         juce::String label = (db == 0.0f) ? "0" : juce::String(static_cast<int>(db));
-        g.drawText(label, static_cast<int>(labelX), static_cast<int>(y - 6), 24, 12, juce::Justification::centredRight);
+        g.drawText(label, static_cast<int>(labelX), static_cast<int>(y - 7), 28, 14, juce::Justification::centredRight);
     }
 }
 
@@ -1142,23 +1260,51 @@ void WaveformDisplay::drawTargetAndRangeLines(juce::Graphics& g)
     }
     
     // === LEFT SIDE LABELS - ABOVE their lines ===
-    g.setFont(CustomLookAndFeel::getPluginFont(11.0f, false));
+    g.setFont(CustomLookAndFeel::getPluginFont(14.0f, true));
     float labelX = waveformArea.getX() + 6.0f;
     
     // Target label - ABOVE the target line
     g.setColour(targetPurpleLight.withAlpha(0.95f));
     juce::String targetLabel = juce::String(static_cast<int>(target)) + " dB";
-    g.drawText(targetLabel, static_cast<int>(labelX), static_cast<int>(targetY - 18), 50, 14, juce::Justification::left);
+    g.drawText(targetLabel, static_cast<int>(labelX), static_cast<int>(targetY - 22), 70, 18, juce::Justification::left);
     
     // Range label (at boost line) - ABOVE the line
     g.setColour(rangeColour.withAlpha(0.85f));
     juce::String rangeLabel = "+" + juce::String(static_cast<int>(boost)) + " dB";
-    g.drawText(rangeLabel, static_cast<int>(labelX), static_cast<int>(boostY - 18), 50, 14, juce::Justification::left);
+    g.drawText(rangeLabel, static_cast<int>(labelX), static_cast<int>(boostY - 22), 70, 18, juce::Justification::left);
     
     // Range label (at cut line) - ABOVE the line
     g.setColour(rangeColour.withAlpha(0.85f));
     juce::String cutLabel = "-" + juce::String(static_cast<int>(cut)) + " dB";
-    g.drawText(cutLabel, static_cast<int>(labelX), static_cast<int>(cutY - 18), 50, 14, juce::Justification::left);
+    g.drawText(cutLabel, static_cast<int>(labelX), static_cast<int>(cutY - 22), 70, 18, juce::Justification::left);
+    
+    // === NOISE FLOOR LINE ===
+    if (noiseFloorActive)
+    {
+        float nfDb = noiseFloorDb.load();
+        if (nfDb > -59.9f)  // Only draw when active (above minimum)
+        {
+            float nfY = dbToY(nfDb);
+            
+            // Red color for noise floor (represents rejection)
+            juce::Colour nfColour(0xFFC04040);
+            
+            // Semi-transparent fill below the noise floor line (to show "dead zone")
+            g.setColour(nfColour.withAlpha(0.06f));
+            g.fillRect(waveformArea.getX(), nfY, lineWidth, waveformArea.getBottom() - nfY);
+            
+            // Dashed line at noise floor level
+            float nfDashLengths[] = { 4.0f, 3.0f };
+            g.setColour(nfColour.withAlpha(0.7f));
+            g.drawDashedLine(juce::Line<float>(waveformArea.getX(), nfY, lineRightEdge, nfY),
+                             nfDashLengths, 2, 1.0f);
+            
+            // Label - just "NF", positioned below the line
+            g.setFont(CustomLookAndFeel::getPluginFont(9.0f, false));
+            g.setColour(nfColour.withAlpha(0.85f));
+            g.drawText("NF", static_cast<int>(labelX), static_cast<int>(nfY + 4), 20, 14, juce::Justification::left);
+        }
+    }
 }
 
 void WaveformDisplay::drawIOMeters(juce::Graphics& g)
@@ -1183,7 +1329,7 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
     g.fillRect(fullMeterArea);
     
     // Reserve space at top for readouts
-    float readoutHeight = 14.0f;  // Smaller readout area
+    float readoutHeight = 16.0f;  // Slightly taller for larger font
     float topPadding = 3.0f;
     float bottomPadding = 6.0f;
     
@@ -1236,9 +1382,52 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
         g.setColour(juce::Colour(0xFF1A1D22));
         g.fillRoundedRectangle(peakMeterBounds, 2.0f);
         
-        // Extended range: -64dB to +6dB to match waveform display
+        // === RMS AVERAGE BAR (slower, dimmer - drawn BEHIND peak bar) ===
+        // Smooth the RMS bar with slow decay (FabFilter-style trailing bar)
+        float peakDbForRms = juce::jmax(inputDb, outputDb);
+        if (peakDbForRms > rmsPeakBarDb)
+        {
+            // Fast attack for RMS bar
+            rmsPeakBarDb = rmsPeakBarDb + (peakDbForRms - rmsPeakBarDb) * 0.3f;
+        }
+        else
+        {
+            // Moderate decay for RMS bar - shows average/sustained level but
+            // fades to zero within ~3 seconds when audio stops (0.5 dB/frame at 30fps = 15 dB/s)
+            rmsPeakBarDb = rmsPeakBarDb - 0.5f;
+            if (rmsPeakBarDb < -100.0f) rmsPeakBarDb = -100.0f;
+        }
+        
+        // Draw RMS bar (dimmer, wider-looking via lower opacity)
+        float rmsNormalized = juce::jmap(rmsPeakBarDb, -64.0f, 0.0f, 0.0f, 1.0f);
+        rmsNormalized = juce::jlimit(0.0f, 1.0f, rmsNormalized);
+        float rmsFillHeight = rmsNormalized * meterHeight;
+        
+        if (rmsFillHeight > 0 && rmsPeakBarDb > -60.0f)
+        {
+            auto rmsFillBounds = peakMeterBounds.withTop(peakMeterBounds.getBottom() - rmsFillHeight);
+            
+            // Same gradient but much dimmer (trailing average bar)
+            juce::ColourGradient rmsGrad;
+            rmsGrad.point1 = { rmsFillBounds.getCentreX(), peakMeterBounds.getBottom() };
+            rmsGrad.point2 = { rmsFillBounds.getCentreX(), peakMeterBounds.getY() };
+            rmsGrad.isRadial = false;
+            
+            rmsGrad.addColour(0.0, juce::Colour(0xFF3AA060).withAlpha(0.25f));
+            rmsGrad.addColour(0.6, juce::Colour(0xFF6AC060).withAlpha(0.25f));
+            rmsGrad.addColour(0.75, juce::Colour(0xFFE0C040).withAlpha(0.25f));
+            rmsGrad.addColour(0.88, juce::Colour(0xFFF08030).withAlpha(0.25f));
+            rmsGrad.addColour(0.95, juce::Colour(0xFFE04040).withAlpha(0.25f));
+            rmsGrad.addColour(1.0, juce::Colour(0xFFFF3030).withAlpha(0.25f));
+            
+            g.setGradientFill(rmsGrad);
+            g.fillRoundedRectangle(rmsFillBounds, 2.0f);
+        }
+        
+        // === PEAK BAR (fast, bright - drawn ON TOP of RMS bar) ===
+        // Range: -64dB to 0dB — 0 dB fills the meter completely to the top
         // Use smoothed value for less jittery display
-        float normalized = juce::jmap(smoothedPeakMeterDb, -64.0f, 6.0f, 0.0f, 1.0f);
+        float normalized = juce::jmap(smoothedPeakMeterDb, -64.0f, 0.0f, 0.0f, 1.0f);
         normalized = juce::jlimit(0.0f, 1.0f, normalized);
         float fillHeight = normalized * meterHeight;
         
@@ -1265,7 +1454,7 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
         }
         
         // === PEAK HOLD INDICATOR LINE ===
-        float peakHoldNorm = juce::jmap(inputPeakHoldDb, -64.0f, 6.0f, 0.0f, 1.0f);
+        float peakHoldNorm = juce::jmap(inputPeakHoldDb, -64.0f, 0.0f, 0.0f, 1.0f);
         peakHoldNorm = juce::jlimit(0.0f, 1.0f, peakHoldNorm);
         float peakHoldY = peakMeterBounds.getBottom() - peakHoldNorm * meterHeight;
         
@@ -1317,7 +1506,7 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
         // Use smoothed value for meter bar display
         if (smoothedMeterGainDb > 0.1f)
         {
-            float normalizedGain = juce::jmin(smoothedMeterGainDb / boost, 1.0f);
+            float normalizedGain = (boost > 0.001f) ? juce::jmin(smoothedMeterGainDb / boost, 1.0f) : 1.0f;
             float barHeight = normalizedGain * halfHeight;
             auto boostBar = gainMeterBounds.withHeight(barHeight).withBottomY(centerY);
             
@@ -1331,7 +1520,7 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
         }
         else if (smoothedMeterGainDb < -0.1f)
         {
-            float normalizedGain = juce::jmin(-smoothedMeterGainDb / cut, 1.0f);
+            float normalizedGain = (cut > 0.001f) ? juce::jmin(-smoothedMeterGainDb / cut, 1.0f) : 1.0f;
             float barHeight = normalizedGain * halfHeight;
             auto cutBar = gainMeterBounds.withHeight(barHeight).withY(centerY);
             
@@ -1345,8 +1534,8 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
         }
     }
     
-    // === READOUTS AT TOP - Smaller font to fit narrow meters ===
-    g.setFont(CustomLookAndFeel::getPluginFont(8.0f, false));
+    // === READOUTS AT TOP ===
+    g.setFont(CustomLookAndFeel::getPluginFont(11.0f, true));
     
     // Peak meter readout - centered over peak meter
     float peakReadoutCenterX = peakMeterBounds.getCentreX();
@@ -1366,8 +1555,8 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
         else
             g.setColour(juce::Colour(0xFF6AC060));
     }
-    g.drawText(peakText, static_cast<int>(peakReadoutCenterX - 10), static_cast<int>(readoutArea.getY() + 1), 
-               20, 12, juce::Justification::centred);
+    g.drawText(peakText, static_cast<int>(peakReadoutCenterX - 14), static_cast<int>(readoutArea.getY() + 1), 
+               28, 14, juce::Justification::centred);
     
     // Gain meter readout - centered over gain meter (with decimal for precision)
     // Use smoothed value for more readable/stable display
@@ -1388,8 +1577,8 @@ void WaveformDisplay::drawIOMeters(juce::Graphics& g)
         gainText = juce::String(smoothedReadoutGainDb, 1);
         g.setColour(juce::Colour(0xFFB060FF));
     }
-    g.drawText(gainText, static_cast<int>(gainReadoutCenterX - 12), static_cast<int>(readoutArea.getY() + 1),
-               24, 12, juce::Justification::centred);
+    g.drawText(gainText, static_cast<int>(gainReadoutCenterX - 16), static_cast<int>(readoutArea.getY() + 1),
+               32, 14, juce::Justification::centred);
     
     g.restoreState();  // Restore from clip region
 }
@@ -1402,46 +1591,50 @@ void WaveformDisplay::drawClippingIndicator(juce::Graphics& /*g*/)
 void WaveformDisplay::drawPhraseIndicator(juce::Graphics& g)
 {
     // Draw Natural Mode phrase indicator in top-right of waveform area
-    // More visible design matching main waveform brightness
-    float indicatorSize = 8.0f;
-    float padding = 8.0f;
+    // Larger, more visible design with clear active/inactive states
+    float indicatorSize = 10.0f;
+    float padding = 10.0f;
     float x = waveformArea.getRight() - ioMeterWidth - indicatorSize - padding;
     float y = waveformArea.getY() + padding;
     
     // Background pill for "NATURAL" label - more visible
-    juce::Rectangle<float> pillArea(x - 52, y - 1, 60 + indicatorSize, indicatorSize + 2);
+    juce::Rectangle<float> pillArea(x - 60, y - 2, 70 + indicatorSize, indicatorSize + 4);
     
     // More visible background
-    g.setColour(juce::Colour(0x40000000));
-    g.fillRoundedRectangle(pillArea, 2.0f);
+    g.setColour(juce::Colour(0x50000000));
+    g.fillRoundedRectangle(pillArea, 4.0f);
+    g.setColour(juce::Colour(0x30FFFFFF));
+    g.drawRoundedRectangle(pillArea, 4.0f, 0.5f);
     
-    // "NATURAL" text - brighter to match main waveform
-    g.setFont(CustomLookAndFeel::getPluginFont(8.0f, true));
-    g.setColour(juce::Colour(0xB0FFFFFF));  // Brighter text
-    g.drawText("NATURAL", pillArea.withTrimmedRight(indicatorSize + 3), juce::Justification::centred);
+    // "NATURAL" text - brighter
+    g.setFont(CustomLookAndFeel::getPluginFont(9.0f, true));
+    g.setColour(juce::Colour(0xC0FFFFFF));
+    g.drawText("NATURAL", pillArea.withTrimmedRight(indicatorSize + 4), juce::Justification::centred);
     
-    // Phrase active indicator dot - brighter to match main waveform
+    // Phrase active indicator dot - clear green vs gray
     juce::Colour dotColour;
     if (phraseActive)
     {
-        // Brighter green-cyan when phrase is active (matches waveform brightness)
-        dotColour = juce::Colour(0xFF70C8A0);  // Brighter
+        // Bright green when phrase is active
+        dotColour = juce::Colour(0xFF50E880);
         
-        // More visible glow
-        g.setColour(dotColour.withAlpha(0.35f));
-        g.fillEllipse(x - 2, y - 2, indicatorSize + 4, indicatorSize + 4);
+        // Subtle glow around the dot (reduced from before)
+        g.setColour(dotColour.withAlpha(0.10f));
+        g.fillEllipse(x - 3, y - 2, indicatorSize + 6, indicatorSize + 4);
+        g.setColour(dotColour.withAlpha(0.20f));
+        g.fillEllipse(x - 1, y - 1, indicatorSize + 2, indicatorSize + 2);
     }
     else
     {
-        // Brighter when not in phrase
-        dotColour = juce::Colour(0xFF6A7078);  // Brighter gray
+        // Dim gray when not in phrase
+        dotColour = juce::Colour(0xFF5A6068);
     }
     
     // Main dot
     g.setColour(dotColour);
     g.fillEllipse(x, y, indicatorSize, indicatorSize);
     
-    // Brighter highlight on dot
-    g.setColour(juce::Colours::white.withAlpha(phraseActive ? 0.35f : 0.15f));
-    g.fillEllipse(x + 1.5f, y + 1.5f, indicatorSize * 0.35f, indicatorSize * 0.35f);
+    // Highlight on dot (specular) - reduced
+    g.setColour(juce::Colours::white.withAlpha(phraseActive ? 0.25f : 0.10f));
+    g.fillEllipse(x + 2.0f, y + 1.5f, indicatorSize * 0.3f, indicatorSize * 0.3f);
 }

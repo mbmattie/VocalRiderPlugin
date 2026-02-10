@@ -19,6 +19,13 @@ void RMSDetector::prepare(double newSampleRate, float newWindowSizeMs)
 {
     sampleRate = newSampleRate;
     windowSizeMs = newWindowSizeMs;
+
+    // Pre-allocate for maximum window size (100ms) to avoid reallocation on audio thread
+    float maxWindowMs = 100.0f;
+    maxBufferSize = static_cast<int>((maxWindowMs / 1000.0f) * sampleRate);
+    maxBufferSize = juce::jmax(1, maxBufferSize);
+    squaredBuffer.resize(static_cast<size_t>(maxBufferSize), 0.0f);
+
     updateBufferSize();
     reset();
 }
@@ -33,12 +40,20 @@ void RMSDetector::reset()
 
 void RMSDetector::updateBufferSize()
 {
-    // Calculate buffer size from window size in ms
+    // Calculate logical buffer size from window size in ms
     bufferSize = static_cast<int>((windowSizeMs / 1000.0f) * sampleRate);
     bufferSize = juce::jmax(1, bufferSize);
-    
-    squaredBuffer.resize(static_cast<size_t>(bufferSize), 0.0f);
-    writeIndex = 0;
+
+    // Only reallocate if exceeding pre-allocated capacity (should not happen on audio thread)
+    if (bufferSize > maxBufferSize)
+    {
+        maxBufferSize = bufferSize;
+        squaredBuffer.resize(static_cast<size_t>(maxBufferSize), 0.0f);
+    }
+
+    // Clamp writeIndex to new logical size (no reallocation needed)
+    if (writeIndex >= bufferSize)
+        writeIndex = 0;
     runningSum = 0.0f;
 }
 
@@ -51,7 +66,7 @@ void RMSDetector::setWindowSize(float newWindowSizeMs)
     }
 }
 
-float RMSDetector::processSample(float sample)
+float RMSDetector::processSampleInternal(float sample)
 {
     // Calculate squared value
     float squared = sample * sample;
@@ -69,10 +84,23 @@ float RMSDetector::processSample(float sample)
     // Advance write index (circular buffer)
     writeIndex = (writeIndex + 1) % bufferSize;
     
-    // Calculate and store current level
-    float levelDb = calculateRmsDb();
-    currentLevelDb.store(levelDb);
+    // Periodically recalculate running sum from scratch to prevent drift
+    // (floating-point accumulation error builds up over millions of samples)
+    if (writeIndex == 0)
+    {
+        float recalculated = 0.0f;
+        for (int i = 0; i < bufferSize; ++i)
+            recalculated += squaredBuffer[static_cast<size_t>(i)];
+        runningSum = recalculated;
+    }
     
+    return calculateRmsDb();
+}
+
+float RMSDetector::processSample(float sample)
+{
+    float levelDb = processSampleInternal(sample);
+    currentLevelDb.store(levelDb);
     return levelDb;
 }
 
@@ -82,8 +110,11 @@ float RMSDetector::processBlock(const float* samples, int numSamples)
     
     for (int i = 0; i < numSamples; ++i)
     {
-        levelDb = processSample(samples[i]);
+        levelDb = processSampleInternal(samples[i]);
     }
+    
+    // Single atomic store at end of block (not per-sample)
+    currentLevelDb.store(levelDb);
     
     return levelDb;
 }

@@ -45,58 +45,45 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     titleLabel.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(titleLabel);
     
-    // Footer text
-    footerLabel.setText("v" + juce::String(JucePlugin_VersionString), juce::dontSendNotification);
+    // Footer text (doubles as status bar for help descriptions on hover)
+    versionString = "v" + juce::String(JucePlugin_VersionString);
+    footerLabel.setText(versionString, juce::dontSendNotification);
     footerLabel.setFont(CustomLookAndFeel::getPluginFont(9.0f));
     footerLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getVeryDimTextColour());
     footerLabel.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(footerLabel);
 
-    // Preset navigation arrows (clean arrow buttons)
+    // Preset navigation arrows - cycle through all loadable presets
     prevPresetButton.onClick = [this] {
+        auto allIds = getNavigablePresetIds();
         int current = presetComboBox.getSelectedId();
-        if (current > 1)
-            presetComboBox.setSelectedId(current - 1);
+        for (int i = static_cast<int>(allIds.size()) - 1; i >= 0; --i) {
+            if (allIds[static_cast<size_t>(i)] < current) {
+                presetComboBox.setSelectedId(allIds[static_cast<size_t>(i)]);
+                return;
+            }
+        }
+        if (!allIds.empty())
+            presetComboBox.setSelectedId(allIds.back());  // Wrap to last
     };
     addAndMakeVisible(prevPresetButton);
     
     nextPresetButton.onClick = [this] {
+        auto allIds = getNavigablePresetIds();
         int current = presetComboBox.getSelectedId();
-        int numItems = presetComboBox.getNumItems();
-        if (current < numItems)
-            presetComboBox.setSelectedId(current + 1);
+        for (size_t i = 0; i < allIds.size(); ++i) {
+            if (allIds[i] > current) {
+                presetComboBox.setSelectedId(allIds[i]);
+                return;
+            }
+        }
+        if (!allIds.empty())
+            presetComboBox.setSelectedId(allIds.front());  // Wrap to first
     };
     addAndMakeVisible(nextPresetButton);
 
     presetComboBox.setTextWhenNothingSelected("Preset");
-    const auto& presets = VocalRiderAudioProcessor::getFactoryPresets();
-    
-    // Build submenus for each category
-    auto* rootMenu = presetComboBox.getRootMenu();
-    rootMenu->clear();
-    
-    // Add "Init" preset at the very beginning (ID = 1000 to avoid conflict)
-    rootMenu->addItem(1000, "Init");
-    rootMenu->addSeparator();
-    
-    // Get unique categories and organize presets (IDs start at 1)
-    std::map<juce::String, juce::PopupMenu> categoryMenus;
-    
-    for (int i = 0; i < static_cast<int>(presets.size()); ++i)
-    {
-        const auto& preset = presets[static_cast<size_t>(i)];
-        categoryMenus[preset.category].addItem(i + 1, preset.name);
-    }
-    
-    // Add category submenus (arrows drawn by CustomLookAndFeel::drawPopupMenuItem)
-    const std::vector<juce::String> categoryOrder = { "Vocals", "Speaking", "Mattie's Favorites" };
-    for (const auto& category : categoryOrder)
-    {
-        if (categoryMenus.find(category) != categoryMenus.end())
-        {
-            rootMenu->addSubMenu(category, categoryMenus[category]);
-        }
-    }
+    rebuildPresetMenu();
     
     presetComboBox.onChange = [this] {
         int selectedId = presetComboBox.getSelectedId();
@@ -107,6 +94,30 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
             audioProcessor.setCurrentPresetIndex(1000);
             presetComboBox.setText("Init", juce::dontSendNotification);
             updateAdvancedControls();
+        }
+        else if (selectedId == 2000)
+        {
+            // "Save As..." action - show save dialog
+            presetComboBox.setSelectedId(0, juce::dontSendNotification);  // Deselect
+            showSavePresetDialog();
+        }
+        else if (selectedId == 2001)
+        {
+            // "Open Preset Folder..." - open the user presets folder in Finder
+            presetComboBox.setSelectedId(0, juce::dontSendNotification);  // Deselect
+            VocalRiderAudioProcessor::getUserPresetsFolder().startAsProcess();
+        }
+        else if (selectedId >= 3000)
+        {
+            // User preset: ID = 3000 + index into cachedUserPresets
+            int userIdx = selectedId - 3000;
+            if (userIdx >= 0 && userIdx < static_cast<int>(cachedUserPresets.size()))
+            {
+                audioProcessor.loadPresetFromData(cachedUserPresets[static_cast<size_t>(userIdx)]);
+                audioProcessor.setCurrentPresetIndex(selectedId);
+                presetComboBox.setText(cachedUserPresets[static_cast<size_t>(userIdx)].name, juce::dontSendNotification);
+                updateAdvancedControls();
+            }
         }
         else if (selectedId > 0)
         {
@@ -179,6 +190,7 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
         if (auto* param = audioProcessor.getApvts().getParameter(VocalRiderAudioProcessor::rangeParamId))
             param->setValueNotifyingHost(param->convertTo0to1(newRange));
     };
+    
 
     //==============================================================================
     // Control Panel (floating tab)
@@ -207,19 +219,18 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
         waveformDisplay.setTargetLevel(static_cast<float>(targetSlider.getValue()));
         
         if (targetSlider.isMouseOverOrDragging()) {
-            bool showHelp = (currentHoveredComponent == &targetSlider && hoverTimeCounter >= helpHoverDelayTicks);
-            juce::String text = showHelp ? getHelpText("TARGET") : juce::String(targetSlider.getValue(), 1) + " dB";
-            valueTooltip.showValue("TARGET", text, &targetSlider, false, showHelp);
+            valueTooltip.showValue("TARGET", juce::String(targetSlider.getValue(), 1) + " dB", &targetSlider);
         }
     };
-    targetSlider.onDragEnd = [this]() { saveStateForUndo(); };  // Save on mouse release
+    targetSlider.onDragEnd = [this]() { saveStateForUndo(); };
     targetSlider.onMouseEnter = [this]() {
         currentHoveredComponent = &targetSlider;
-        hoverTimeCounter = 0;
+        setStatusBarText(getShortHelpText("TARGET"));
         valueTooltip.showValue("TARGET", juce::String(targetSlider.getValue(), 1) + " dB", &targetSlider);
     };
     targetSlider.onMouseExit = [this]() {
-        if (currentHoveredComponent == &targetSlider) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+        if (currentHoveredComponent == &targetSlider) { currentHoveredComponent = nullptr; }
+        clearStatusBarText();
         valueTooltip.hideTooltip();
     };
     
@@ -233,19 +244,18 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     setupSliderWithTooltip(rangeSlider, " dB");
     rangeSlider.onValueChange = [this]() {
         if (rangeSlider.isMouseOverOrDragging()) {
-            bool showHelp = (currentHoveredComponent == &rangeSlider && hoverTimeCounter >= helpHoverDelayTicks);
-            juce::String text = showHelp ? getHelpText("RANGE") : juce::String(rangeSlider.getValue(), 1) + " dB";
-            valueTooltip.showValue("RANGE", text, &rangeSlider, false, showHelp);
+            valueTooltip.showValue("RANGE", juce::String(rangeSlider.getValue(), 1) + " dB", &rangeSlider);
         }
     };
-    rangeSlider.onDragEnd = [this]() { saveStateForUndo(); };  // Save on mouse release
+    rangeSlider.onDragEnd = [this]() { saveStateForUndo(); };
     rangeSlider.onMouseEnter = [this]() {
         currentHoveredComponent = &rangeSlider;
-        hoverTimeCounter = 0;
+        setStatusBarText(getShortHelpText("RANGE"));
         valueTooltip.showValue("RANGE", juce::String(rangeSlider.getValue(), 1) + " dB", &rangeSlider);
     };
     rangeSlider.onMouseExit = [this]() {
-        if (currentHoveredComponent == &rangeSlider) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+        if (currentHoveredComponent == &rangeSlider) { currentHoveredComponent = nullptr; }
+        clearStatusBarText();
         valueTooltip.hideTooltip();
     };
     
@@ -255,25 +265,26 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     rangeLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(rangeLabel);
     
+    // Range is always locked (boost/cut always linked)
+    
     // Speed knob
     setupSliderWithTooltip(speedSlider, "%");
     speedSlider.onValueChange = [this] {
         audioProcessor.updateAttackReleaseFromSpeed(static_cast<float>(speedSlider.getValue()), true);  // true = update UI sliders
         if (advancedPanelVisible) updateAdvancedControls();
         if (speedSlider.isMouseOverOrDragging()) {
-            bool showHelp = (currentHoveredComponent == &speedSlider && hoverTimeCounter >= helpHoverDelayTicks);
-            juce::String text = showHelp ? getHelpText("SPEED") : juce::String(static_cast<int>(speedSlider.getValue())) + "%";
-            valueTooltip.showValue("SPEED", text, &speedSlider, false, showHelp);
+            valueTooltip.showValue("SPEED", juce::String(static_cast<int>(speedSlider.getValue())) + "%", &speedSlider);
         }
     };
-    speedSlider.onDragEnd = [this]() { saveStateForUndo(); };  // Save on mouse release
+    speedSlider.onDragEnd = [this]() { saveStateForUndo(); };
     speedSlider.onMouseEnter = [this]() {
         currentHoveredComponent = &speedSlider;
-        hoverTimeCounter = 0;
+        setStatusBarText(getShortHelpText("SPEED"));
         valueTooltip.showValue("SPEED", juce::String(static_cast<int>(speedSlider.getValue())) + "%", &speedSlider);
     };
     speedSlider.onMouseExit = [this]() {
-        if (currentHoveredComponent == &speedSlider) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+        if (currentHoveredComponent == &speedSlider) { currentHoveredComponent = nullptr; }
+        clearStatusBarText();
         valueTooltip.hideTooltip();
     };
     
@@ -295,10 +306,8 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     gainMeterLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(gainMeterLabel);
     
-    // Natural toggle - synced from processor state in updateAdvancedControls()
-    naturalToggle.onClick = [this] {
-        audioProcessor.setNaturalModeEnabled(naturalToggle.getToggleState());
-    };
+    // Natural toggle - synced via ButtonAttachment to APVTS parameter
+    // The APVTS parameter is read in processBlock to set naturalModeEnabled
     addAndMakeVisible(naturalToggle);
     
     // Smart Silence toggle - synced from processor state in updateAdvancedControls()
@@ -313,7 +322,7 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
         // Always start learning on click
         autoTargetButton.setToggleState(true, juce::dontSendNotification);
         autoTargetButton.setPulsing(true);  // Start pulsing animation
-        learnCountdown = 180;  // 3 seconds at 60Hz
+        learnCountdown = 90;   // 3 seconds at 30Hz timer
         // Reset learning stats - min starts HIGH so actual audio is captured
         learnMinDb = 6.0f;     // Start high - actual audio will be lower
         learnMaxDb = -100.0f;  // Start low - actual audio will be higher
@@ -352,52 +361,49 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     automationLabel.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(automationLabel);
     
-    // Natural toggle - hover tracking for help tooltip
+    // Natural toggle - status bar help on hover
     naturalToggle.onMouseEnter = [this]() {
         currentHoveredComponent = &naturalToggle;
-        hoverTimeCounter = 0;
+        setStatusBarText(getShortHelpText("NATURAL"));
     };
     naturalToggle.onMouseExit = [this]() {
-        if (currentHoveredComponent == &naturalToggle) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
-        valueTooltip.hideTooltip();
+        if (currentHoveredComponent == &naturalToggle) { currentHoveredComponent = nullptr; }
+        clearStatusBarText();
     };
     
-    // Silence toggle - hover tracking for help tooltip
+    // Silence toggle - status bar help on hover
     silenceToggle.onMouseEnter = [this]() {
         currentHoveredComponent = &silenceToggle;
-        hoverTimeCounter = 0;
+        setStatusBarText(getShortHelpText("SILENCE"));
     };
     silenceToggle.onMouseExit = [this]() {
-        if (currentHoveredComponent == &silenceToggle) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
-        valueTooltip.hideTooltip();
+        if (currentHoveredComponent == &silenceToggle) { currentHoveredComponent = nullptr; }
+        clearStatusBarText();
     };
     
-    // Auto-target button - hover tracking for help tooltip
+    // Auto-target button - status bar help on hover
     autoTargetButton.onMouseEnter = [this]() {
         currentHoveredComponent = &autoTargetButton;
-        hoverTimeCounter = 0;
+        setStatusBarText(getShortHelpText("AUTOTARGET"));
     };
     autoTargetButton.onMouseExit = [this]() {
-        if (currentHoveredComponent == &autoTargetButton) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
-        valueTooltip.hideTooltip();
+        if (currentHoveredComponent == &autoTargetButton) { currentHoveredComponent = nullptr; }
+        clearStatusBarText();
     };
     
-    // Help button opens About dialog with fade animation (toggle behavior)
-    helpButton.setClickingTogglesState(true);
+    // Help button opens About dialog (not toggle - only X closes it)
+    helpButton.setClickingTogglesState(false);
     helpButton.onClick = [this] {
-        if (helpButton.getToggleState())
+        if (!aboutDialog.isShowing())
             aboutDialog.show();
-        else
-            aboutDialog.hide();
     };
     addAndMakeVisible(helpButton);
     
-    // Setup About dialog panel (initially hidden)
+    // Setup About dialog panel (initially hidden, modal-like behavior)
     aboutDialog.setVersion(JucePlugin_VersionString);
     aboutDialog.setVisible(false);
     aboutDialog.onClose = [this] {
-        // Sync button state when dialog is closed
-        helpButton.setToggleState(false, juce::dontSendNotification);
+        // No toggle state to sync - button is not a toggle anymore
     };
     addAndMakeVisible(aboutDialog);
     
@@ -426,6 +432,8 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
         audioProcessor.getApvts(), VocalRiderAudioProcessor::naturalModeParamId, naturalToggle);
     smartSilenceAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         audioProcessor.getApvts(), VocalRiderAudioProcessor::smartSilenceParamId, silenceToggle);
+    noiseFloorAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getApvts(), VocalRiderAudioProcessor::noiseFloorParamId, noiseFloorSlider);
 
     // Initialize undo history with current state
     undoHistory.push_back(getCurrentState());
@@ -450,12 +458,14 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
         holdSlider.setAlpha(alpha);
         breathReductionSlider.setAlpha(alpha);
         transientPreservationSlider.setAlpha(alpha);
+        noiseFloorSlider.setAlpha(alpha);
         outputTrimMeter.setAlpha(alpha);
         attackLabel.setAlpha(alpha);
         releaseLabel.setAlpha(alpha);
         holdLabel.setAlpha(alpha);
         breathLabel.setAlpha(alpha);
         transientLabel.setAlpha(alpha);
+        noiseFloorLabel.setAlpha(alpha);
         outputTrimLabel.setAlpha(alpha);
     trimMinLabel.setAlpha(alpha);
     trimMidLabel.setAlpha(alpha);
@@ -473,12 +483,14 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
         holdSlider.setVisible(false);
         breathReductionSlider.setVisible(false);
         transientPreservationSlider.setVisible(false);
+        noiseFloorSlider.setVisible(false);
         outputTrimMeter.setVisible(false);
         attackLabel.setVisible(false);
         releaseLabel.setVisible(false);
         holdLabel.setVisible(false);
         breathLabel.setVisible(false);
         transientLabel.setVisible(false);
+        noiseFloorLabel.setVisible(false);
         outputTrimLabel.setVisible(false);
         trimMinLabel.setVisible(false);
         trimMidLabel.setVisible(false);
@@ -541,116 +553,130 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     attackSlider.onValueChange = [this] {
         audioProcessor.setAttackMs(static_cast<float>(attackSlider.getValue()));
         if (attackSlider.isMouseOverOrDragging()) {
-            bool showHelp = (currentHoveredComponent == &attackSlider && hoverTimeCounter >= helpHoverDelayTicks);
-            juce::String text = showHelp ? getHelpText("ATTACK") : juce::String(static_cast<int>(attackSlider.getValue())) + " ms";
-            valueTooltip.showValue("ATTACK", text, &attackSlider, false, showHelp);
+            valueTooltip.showValue("ATTACK", juce::String(static_cast<int>(attackSlider.getValue())) + " ms", &attackSlider);
         }
     };
     attackSlider.onMouseEnter = [this]() {
         currentHoveredComponent = &attackSlider;
-        hoverTimeCounter = 0;
+        setStatusBarText(getShortHelpText("ATTACK"));
         valueTooltip.showValue("ATTACK", juce::String(static_cast<int>(attackSlider.getValue())) + " ms", &attackSlider);
     };
     attackSlider.onMouseExit = [this]() {
-        if (currentHoveredComponent == &attackSlider) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+        if (currentHoveredComponent == &attackSlider) { currentHoveredComponent = nullptr; }
+        clearStatusBarText();
     };
     
     setupAdvSlider(releaseSlider, 10.0, 2000.0, "ms");
     releaseSlider.onValueChange = [this] {
         audioProcessor.setReleaseMs(static_cast<float>(releaseSlider.getValue()));
         if (releaseSlider.isMouseOverOrDragging()) {
-            bool showHelp = (currentHoveredComponent == &releaseSlider && hoverTimeCounter >= helpHoverDelayTicks);
-            juce::String text = showHelp ? getHelpText("RELEASE") : juce::String(static_cast<int>(releaseSlider.getValue())) + " ms";
-            valueTooltip.showValue("RELEASE", text, &releaseSlider, false, showHelp);
+            valueTooltip.showValue("RELEASE", juce::String(static_cast<int>(releaseSlider.getValue())) + " ms", &releaseSlider);
         }
     };
     releaseSlider.onMouseEnter = [this]() {
         currentHoveredComponent = &releaseSlider;
-        hoverTimeCounter = 0;
+        setStatusBarText(getShortHelpText("RELEASE"));
         valueTooltip.showValue("RELEASE", juce::String(static_cast<int>(releaseSlider.getValue())) + " ms", &releaseSlider);
     };
     releaseSlider.onMouseExit = [this]() {
-        if (currentHoveredComponent == &releaseSlider) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+        if (currentHoveredComponent == &releaseSlider) { currentHoveredComponent = nullptr; }
+        clearStatusBarText();
     };
     
     setupAdvSlider(holdSlider, 0.0, 500.0, "ms");
     holdSlider.onValueChange = [this] {
         audioProcessor.setHoldMs(static_cast<float>(holdSlider.getValue()));
         if (holdSlider.isMouseOverOrDragging()) {
-            bool showHelp = (currentHoveredComponent == &holdSlider && hoverTimeCounter >= helpHoverDelayTicks);
-            juce::String text = showHelp ? getHelpText("HOLD") : juce::String(static_cast<int>(holdSlider.getValue())) + " ms";
-            valueTooltip.showValue("HOLD", text, &holdSlider, false, showHelp);
+            valueTooltip.showValue("HOLD", juce::String(static_cast<int>(holdSlider.getValue())) + " ms", &holdSlider);
         }
     };
     holdSlider.onMouseEnter = [this]() {
         currentHoveredComponent = &holdSlider;
-        hoverTimeCounter = 0;
+        setStatusBarText(getShortHelpText("HOLD"));
         valueTooltip.showValue("HOLD", juce::String(static_cast<int>(holdSlider.getValue())) + " ms", &holdSlider);
     };
     holdSlider.onMouseExit = [this]() {
-        if (currentHoveredComponent == &holdSlider) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+        if (currentHoveredComponent == &holdSlider) { currentHoveredComponent = nullptr; }
+        clearStatusBarText();
     };
     
     setupAdvSlider(breathReductionSlider, 0.0, 12.0, "dB");
     breathReductionSlider.onValueChange = [this] {
         audioProcessor.setBreathReduction(static_cast<float>(breathReductionSlider.getValue()));
         if (breathReductionSlider.isMouseOverOrDragging()) {
-            bool showHelp = (currentHoveredComponent == &breathReductionSlider && hoverTimeCounter >= helpHoverDelayTicks);
-            // Show minus sign to indicate breath reduction (subtracting dB)
             double val = breathReductionSlider.getValue();
             juce::String valStr = (val > 0.05 ? "-" : "") + juce::String(val, 1) + " dB";
-            juce::String text = showHelp ? getHelpText("BREATH") : valStr;
-            valueTooltip.showValue("BREATH", text, &breathReductionSlider, false, showHelp);
+            valueTooltip.showValue("BREATH", valStr, &breathReductionSlider);
         }
     };
     breathReductionSlider.onMouseEnter = [this]() {
         currentHoveredComponent = &breathReductionSlider;
-        hoverTimeCounter = 0;
-        // Show minus sign to indicate breath reduction
+        setStatusBarText(getShortHelpText("BREATH"));
         double val = breathReductionSlider.getValue();
         juce::String valStr = (val > 0.05 ? "-" : "") + juce::String(val, 1) + " dB";
         valueTooltip.showValue("BREATH", valStr, &breathReductionSlider);
     };
     breathReductionSlider.onMouseExit = [this]() {
-        if (currentHoveredComponent == &breathReductionSlider) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+        if (currentHoveredComponent == &breathReductionSlider) { currentHoveredComponent = nullptr; }
+        clearStatusBarText();
     };
     
     setupAdvSlider(transientPreservationSlider, 0.0, 100.0, "%");
     transientPreservationSlider.onValueChange = [this] {
         audioProcessor.setTransientPreservation(static_cast<float>(transientPreservationSlider.getValue()) / 100.0f);
         if (transientPreservationSlider.isMouseOverOrDragging()) {
-            bool showHelp = (currentHoveredComponent == &transientPreservationSlider && hoverTimeCounter >= helpHoverDelayTicks);
-            juce::String text = showHelp ? getHelpText("TRANSIENT") : juce::String(static_cast<int>(transientPreservationSlider.getValue())) + "%";
-            valueTooltip.showValue("TRANSIENT", text, &transientPreservationSlider, false, showHelp);
+            valueTooltip.showValue("TRANSIENT", juce::String(static_cast<int>(transientPreservationSlider.getValue())) + "%", &transientPreservationSlider);
         }
     };
     transientPreservationSlider.onMouseEnter = [this]() {
         currentHoveredComponent = &transientPreservationSlider;
-        hoverTimeCounter = 0;
+        setStatusBarText(getShortHelpText("TRANSIENT"));
         valueTooltip.showValue("TRANSIENT", juce::String(static_cast<int>(transientPreservationSlider.getValue())) + "%", &transientPreservationSlider);
     };
     transientPreservationSlider.onMouseExit = [this]() {
-        if (currentHoveredComponent == &transientPreservationSlider) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+        if (currentHoveredComponent == &transientPreservationSlider) { currentHoveredComponent = nullptr; }
+        clearStatusBarText();
+    };
+    
+    setupAdvSlider(noiseFloorSlider, -60.0, -20.0, "dB");
+    noiseFloorSlider.setRange(-60.0, -20.0, 0.5);  // Override: smoother 0.5 dB steps
+    noiseFloorSlider.onValueChange = [this] {
+        audioProcessor.setNoiseFloor(static_cast<float>(noiseFloorSlider.getValue()));
+        if (noiseFloorSlider.isMouseOverOrDragging()) {
+            juce::String valStr = juce::String(noiseFloorSlider.getValue(), 1) + " dB";
+            if (noiseFloorSlider.getValue() <= -59.9) valStr = "OFF";
+            valueTooltip.showValue("NOISE FLOOR", valStr, &noiseFloorSlider);
+        }
+    };
+    noiseFloorSlider.onMouseEnter = [this]() {
+        currentHoveredComponent = &noiseFloorSlider;
+        setStatusBarText(getShortHelpText("NOISEFLOOR"));
+        juce::String valStr = juce::String(noiseFloorSlider.getValue(), 1) + " dB";
+        if (noiseFloorSlider.getValue() <= -59.9) valStr = "OFF";
+        valueTooltip.showValue("NOISE FLOOR", valStr, &noiseFloorSlider);
+    };
+    noiseFloorSlider.onMouseExit = [this]() {
+        if (currentHoveredComponent == &noiseFloorSlider) { currentHoveredComponent = nullptr; }
+        clearStatusBarText();
     };
     
     // Output Trim - AdjustableGainMeter style (similar to MiniGainMeter but adjustable)
     outputTrimMeter.setValue(0.0f);  // Start at 0 dB
     outputTrimMeter.onValueChanged = [this](float valueDb) {
         audioProcessor.setOutputTrim(valueDb);
-        bool showHelp = (currentHoveredComponent == &outputTrimMeter && hoverTimeCounter >= helpHoverDelayTicks);
         juce::String valStr = (valueDb >= 0 ? "+" : "") + juce::String(valueDb, 1) + " dB";
-        juce::String text = showHelp ? getHelpText("OUTPUT") : valStr;
-        valueTooltip.showValue("OUTPUT", text, &outputTrimMeter, false, showHelp);
+        valueTooltip.showValue("OUTPUT", valStr, &outputTrimMeter);
     };
     outputTrimMeter.onMouseEnter = [this]() {
         currentHoveredComponent = &outputTrimMeter;
-        hoverTimeCounter = 0;
+        setStatusBarText(getShortHelpText("OUTPUT"));
         float val = outputTrimMeter.getValue();
         juce::String valStr = (val >= 0 ? "+" : "") + juce::String(val, 1) + " dB";
         valueTooltip.showValue("OUTPUT", valStr, &outputTrimMeter);
     };
     outputTrimMeter.onMouseExit = [this]() {
-        if (currentHoveredComponent == &outputTrimMeter) { currentHoveredComponent = nullptr; hoverTimeCounter = 0; }
+        if (currentHoveredComponent == &outputTrimMeter) { currentHoveredComponent = nullptr; }
+        clearStatusBarText();
     };
     addAndMakeVisible(outputTrimMeter);
     outputTrimMeter.setVisible(false);
@@ -662,6 +688,7 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     setupAdvLabel(holdLabel, "HOLD");
     setupAdvLabel(breathLabel, "BREATH");
     setupAdvLabel(transientLabel, "TRANSIENT");
+    setupAdvLabel(noiseFloorLabel, "NOISE FL.");
     setupAdvLabel(outputTrimLabel, "OUTPUT");
     
     // Output trim range indicator labels (faint, around knob)
@@ -690,6 +717,10 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
 
 VocalRiderAudioProcessorEditor::~VocalRiderAudioProcessorEditor()
 {
+    // FIRST: Stop audio thread from accessing our waveform display
+    // Must happen before anything else to prevent use-after-free
+    audioProcessor.setWaveformDisplay(nullptr);
+    
     stopTimer();
     
     // Clear ALL attachments BEFORE sliders/buttons are destroyed
@@ -705,9 +736,214 @@ VocalRiderAudioProcessorEditor::~VocalRiderAudioProcessorEditor()
     naturalModeAttachment.reset();
     smartSilenceAttachment.reset();
     outputTrimAttachment.reset();
+    noiseFloorAttachment.reset();
     
-    audioProcessor.setWaveformDisplay(nullptr);
     setLookAndFeel(nullptr);
+}
+
+//==============================================================================
+void VocalRiderAudioProcessorEditor::rebuildPresetMenu()
+{
+    const auto& presets = VocalRiderAudioProcessor::getFactoryPresets();
+    cachedUserPresets = VocalRiderAudioProcessor::loadUserPresets();
+    
+    auto* rootMenu = presetComboBox.getRootMenu();
+    rootMenu->clear();
+    
+    // Add "Init" preset at the very beginning (ID = 1000 to avoid conflict)
+    rootMenu->addItem(1000, "Init");
+    rootMenu->addSeparator();
+    
+    // Factory presets organized by category (IDs start at 1)
+    std::map<juce::String, juce::PopupMenu> categoryMenus;
+    
+    for (int i = 0; i < static_cast<int>(presets.size()); ++i)
+    {
+        const auto& preset = presets[static_cast<size_t>(i)];
+        categoryMenus[preset.category].addItem(i + 1, preset.name);
+    }
+    
+    const std::vector<juce::String> categoryOrder = { "Vocals", "Speaking", "Mattie's Favorites" };
+    for (const auto& category : categoryOrder)
+    {
+        if (categoryMenus.find(category) != categoryMenus.end())
+        {
+            rootMenu->addSubMenu(category, categoryMenus[category]);
+        }
+    }
+    
+    // User presets section (if any exist)
+    if (!cachedUserPresets.empty())
+    {
+        rootMenu->addSeparator();
+        juce::PopupMenu userMenu;
+        for (int i = 0; i < static_cast<int>(cachedUserPresets.size()); ++i)
+        {
+            userMenu.addItem(3000 + i, cachedUserPresets[static_cast<size_t>(i)].name);
+        }
+        rootMenu->addSubMenu("User", userMenu);
+    }
+    
+    // Save As and Open Folder options at the bottom
+    rootMenu->addSeparator();
+    rootMenu->addItem(2000, "Save As...");
+    rootMenu->addItem(2001, "Open Preset Folder...");
+}
+
+std::vector<int> VocalRiderAudioProcessorEditor::getNavigablePresetIds() const
+{
+    std::vector<int> ids;
+    // Init
+    ids.push_back(1000);
+    // Factory presets (1-based)
+    const auto& factory = VocalRiderAudioProcessor::getFactoryPresets();
+    for (int i = 0; i < static_cast<int>(factory.size()); ++i)
+        ids.push_back(i + 1);
+    // User presets
+    for (int i = 0; i < static_cast<int>(cachedUserPresets.size()); ++i)
+        ids.push_back(3000 + i);
+    // Sort so navigation is in order: factory (1-18), Init (1000), User (3000+)
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+
+void VocalRiderAudioProcessorEditor::showSavePresetDialog()
+{
+    // Create a custom styled overlay component matching the plugin aesthetic
+    // Stored in a unique_ptr member so it's cleaned up if the editor is destroyed
+    saveDialogOverlay = std::make_unique<juce::Component>();
+    auto* overlay = saveDialogOverlay.get();
+    overlay->setBounds(getLocalBounds());
+    overlay->setAlwaysOnTop(true);
+    addAndMakeVisible(overlay);
+    overlay->toFront(true);
+    
+    // Text editor for preset name
+    auto* nameEditor = new juce::TextEditor();
+    nameEditor->setFont(CustomLookAndFeel::getPluginFont(12.0f, false));
+    nameEditor->setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xFF1A1D22));
+    nameEditor->setColour(juce::TextEditor::textColourId, juce::Colour(0xFFD0D4DC));
+    nameEditor->setColour(juce::TextEditor::outlineColourId, CustomLookAndFeel::getAccentColour().withAlpha(0.5f));
+    nameEditor->setColour(juce::TextEditor::focusedOutlineColourId, CustomLookAndFeel::getAccentColour());
+    nameEditor->setColour(juce::CaretComponent::caretColourId, CustomLookAndFeel::getAccentColour());
+    nameEditor->setJustification(juce::Justification::centredLeft);
+    nameEditor->setTextToShowWhenEmpty("Enter preset name...", juce::Colour(0xFF606878));
+    overlay->addAndMakeVisible(nameEditor);
+    
+    // Save button
+    auto* saveBtn = new juce::TextButton("Save");
+    saveBtn->setColour(juce::TextButton::buttonColourId, CustomLookAndFeel::getAccentColour().withAlpha(0.4f));
+    saveBtn->setColour(juce::TextButton::textColourOffId, juce::Colour(0xFFD0D4DC));
+    overlay->addAndMakeVisible(saveBtn);
+    
+    // Cancel button
+    auto* cancelBtn = new juce::TextButton("Cancel");
+    cancelBtn->setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF2A2D35));
+    cancelBtn->setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF8A8F98));
+    overlay->addAndMakeVisible(cancelBtn);
+    
+    // Layout
+    float dialogW = 260.0f;
+    float dialogH = 130.0f;
+    float cx = static_cast<float>(getWidth()) / 2.0f;
+    float cy = static_cast<float>(getHeight()) / 2.0f;
+    auto dialogBounds = juce::Rectangle<float>(cx - dialogW / 2.0f, cy - dialogH / 2.0f, dialogW, dialogH);
+    
+    nameEditor->setBounds(static_cast<int>(dialogBounds.getX()) + 20,
+                           static_cast<int>(dialogBounds.getY()) + 50,
+                           static_cast<int>(dialogW) - 40, 26);
+    saveBtn->setBounds(static_cast<int>(dialogBounds.getX()) + 20,
+                        static_cast<int>(dialogBounds.getBottom()) - 38,
+                        static_cast<int>(dialogW / 2.0f) - 30, 26);
+    cancelBtn->setBounds(static_cast<int>(dialogBounds.getCentreX()) + 10,
+                          static_cast<int>(dialogBounds.getBottom()) - 38,
+                          static_cast<int>(dialogW / 2.0f) - 30, 26);
+    
+    // Paint custom background
+    overlay->setPaintingIsUnclipped(true);
+    auto dialogBoundsCopy = dialogBounds;
+    overlay->setBufferedToImage(false);
+    
+    struct SaveDialogOverlay : public juce::Component
+    {
+        juce::Rectangle<float> dlgBounds;
+        void paint(juce::Graphics& g) override
+        {
+            // Dark semi-transparent backdrop
+            g.setColour(juce::Colours::black.withAlpha(0.4f));
+            g.fillRect(getLocalBounds());
+            
+            // Dialog shadow
+            g.setColour(juce::Colours::black.withAlpha(0.5f));
+            g.fillRoundedRectangle(dlgBounds.translated(0.0f, 6.0f), 10.0f);
+            
+            // Dialog background
+            juce::ColourGradient bgGrad(
+                juce::Colour(0xFF282C34), dlgBounds.getX(), dlgBounds.getY(),
+                juce::Colour(0xFF1A1D22), dlgBounds.getX(), dlgBounds.getBottom(), false);
+            g.setGradientFill(bgGrad);
+            g.fillRoundedRectangle(dlgBounds, 10.0f);
+            
+            // Border
+            g.setColour(CustomLookAndFeel::getBorderColour().withAlpha(0.6f));
+            g.drawRoundedRectangle(dlgBounds, 10.0f, 1.0f);
+            
+            // Accent line
+            g.setColour(CustomLookAndFeel::getAccentColour().withAlpha(0.5f));
+            g.fillRoundedRectangle(dlgBounds.getX() + 30, dlgBounds.getY() + 4, dlgBounds.getWidth() - 60, 2.0f, 1.0f);
+            
+            // Title
+            g.setColour(juce::Colour(0xFFD0D4DC));
+            g.setFont(CustomLookAndFeel::getPluginFont(13.0f, true));
+            g.drawText("Save Preset", dlgBounds.withHeight(40.0f).translated(0, 10), juce::Justification::centred);
+        }
+        void mouseDown(const juce::MouseEvent&) override {} // Block clicks behind
+    };
+    
+    auto* bg = new SaveDialogOverlay();
+    bg->dlgBounds = dialogBounds;
+    bg->setBounds(getLocalBounds());
+    bg->setInterceptsMouseClicks(true, true);
+    overlay->addAndMakeVisible(bg);
+    bg->toBack();  // Behind the text editor and buttons
+    
+    nameEditor->grabKeyboardFocus();
+    
+    // Callbacks
+    // Use callAsync with SafePointer to defer deletion safely.
+    // SafePointer prevents crash if the editor is destroyed before async call executes.
+    juce::Component::SafePointer<juce::Component> safeOverlay(overlay);
+    juce::Component::SafePointer<VocalRiderAudioProcessorEditor> safeEditor(this);
+    
+    saveBtn->onClick = [safeEditor, nameEditor]() {
+        if (safeEditor != nullptr)
+        {
+            auto name = nameEditor->getText().trim();
+            if (name.isNotEmpty())
+            {
+                safeEditor->audioProcessor.saveUserPreset(name);
+                safeEditor->rebuildPresetMenu();
+                safeEditor->presetComboBox.setText(name, juce::dontSendNotification);
+            }
+            // Release the overlay (destroys it and all children safely)
+            safeEditor->saveDialogOverlay.reset();
+        }
+    };
+    
+    cancelBtn->onClick = [safeEditor]() {
+        if (safeEditor != nullptr)
+            safeEditor->saveDialogOverlay.reset();
+    };
+    
+    // Enter key saves
+    nameEditor->onReturnKey = [saveBtn]() {
+        saveBtn->triggerClick();
+    };
+    
+    // Escape key cancels
+    nameEditor->onEscapeKey = [cancelBtn]() {
+        cancelBtn->triggerClick();
+    };
 }
 
 //==============================================================================
@@ -722,6 +958,7 @@ void VocalRiderAudioProcessorEditor::updateAdvancedControls()
     breathReductionSlider.setValue(audioProcessor.getBreathReduction(), juce::dontSendNotification);
     transientPreservationSlider.setValue(audioProcessor.getTransientPreservation() * 100.0f, juce::dontSendNotification);
     outputTrimMeter.setValue(audioProcessor.getOutputTrim());
+    noiseFloorSlider.setValue(audioProcessor.getNoiseFloor(), juce::dontSendNotification);
     
     // Bottom bar UI state
     silenceToggle.setToggleState(audioProcessor.isSmartSilenceEnabled(), juce::dontSendNotification);
@@ -753,12 +990,14 @@ void VocalRiderAudioProcessorEditor::toggleAdvancedPanel()
     holdSlider.setVisible(true);
     breathReductionSlider.setVisible(true);
     transientPreservationSlider.setVisible(true);
+    noiseFloorSlider.setVisible(true);
     outputTrimMeter.setVisible(true);
     attackLabel.setVisible(true);
     releaseLabel.setVisible(true);
     holdLabel.setVisible(true);
     breathLabel.setVisible(true);
     transientLabel.setVisible(true);
+    noiseFloorLabel.setVisible(true);
     outputTrimLabel.setVisible(true);
     trimMinLabel.setVisible(true);
     trimMidLabel.setVisible(true);
@@ -774,12 +1013,14 @@ void VocalRiderAudioProcessorEditor::toggleAdvancedPanel()
     holdSlider.setAlpha(alpha);
     breathReductionSlider.setAlpha(alpha);
     transientPreservationSlider.setAlpha(alpha);
+    noiseFloorSlider.setAlpha(alpha);
     outputTrimMeter.setAlpha(alpha);
     attackLabel.setAlpha(alpha);
     releaseLabel.setAlpha(alpha);
     holdLabel.setAlpha(alpha);
     breathLabel.setAlpha(alpha);
     transientLabel.setAlpha(alpha);
+    noiseFloorLabel.setAlpha(alpha);
     outputTrimLabel.setAlpha(alpha);
     trimMinLabel.setAlpha(alpha);
     trimMidLabel.setAlpha(alpha);
@@ -799,7 +1040,7 @@ void VocalRiderAudioProcessorEditor::setWindowSize(WindowSize size)
 {
     currentWindowSize = size;
     
-    int width, height;
+    int width = mediumWidth, height = mediumHeight;
     int sizeIndex = 1;  // Default to Medium
     switch (size)
     {
@@ -836,7 +1077,7 @@ void VocalRiderAudioProcessorEditor::setScale(int scalePercent)
     resizeButton.currentScale = scalePercent;
     
     // Recalculate size based on current window preset and new scale
-    int baseWidth, baseHeight;
+    int baseWidth = mediumWidth, baseHeight = mediumHeight;
     switch (currentWindowSize)
     {
         case WindowSize::Small:
@@ -874,20 +1115,23 @@ void VocalRiderAudioProcessorEditor::paint(juce::Graphics& g)
     // Base background with subtle texture
     g.fillAll(CustomLookAndFeel::getBackgroundColour());
     
-    // Subtle noise texture for brushed metal feel
-    juce::Random rng(123);
-    for (int y = 0; y < getHeight(); y += 4)
+    // Cached noise texture for brushed metal feel (regenerated only on resize)
+    if (cachedNoiseTexture.isNull() || cachedNoiseTexture.getWidth() != getWidth() || cachedNoiseTexture.getHeight() != getHeight())
     {
-        for (int x = 0; x < getWidth(); x += 4)
+        cachedNoiseTexture = juce::Image(juce::Image::ARGB, getWidth(), getHeight(), true);
+        juce::Graphics noiseG(cachedNoiseTexture);
+        juce::Random rng(123);
+        noiseG.setColour(juce::Colours::white.withAlpha(0.02f));
+        for (int y = 0; y < getHeight(); y += 4)
         {
-            float noise = rng.nextFloat();
-            if (noise > 0.75f)
+            for (int x = 0; x < getWidth(); x += 4)
             {
-                g.setColour(juce::Colours::white.withAlpha(0.02f));
-                g.fillRect(x, y, 2, 2);
+                if (rng.nextFloat() > 0.75f)
+                    noiseG.fillRect(x, y, 2, 2);
             }
         }
     }
+    g.drawImageAt(cachedNoiseTexture, 0, 0);
     
     //==========================================================================
     // FabFilter-style header bar
@@ -1044,8 +1288,8 @@ void VocalRiderAudioProcessorEditor::resized()
     auto bottomArea = bounds.removeFromBottom(bottomBarHeight);
     bottomBar.setBounds(bottomArea);
     
-    // Left side: Footer label (version)
-    footerLabel.setBounds(bottomArea.getX() + 8, bottomArea.getY() + 5, 50, 16);
+    // Left side: Footer label (version / status bar help text)
+    footerLabel.setBounds(bottomArea.getX() + 8, bottomArea.getY() + 5, 200, 16);
     
     // Center: Toggle buttons - Smart Silence centered under target knob, others around it
     int naturalW = 72;
@@ -1103,14 +1347,13 @@ void VocalRiderAudioProcessorEditor::resized()
         
         advContent.removeFromTop(6);
         
-        // LEFT SIDE: 5 Knobs with labels below
-        int advKnobSize = 46;
+        // LEFT SIDE: 6 Knobs with labels below
+        int advKnobSize = 42;  // Slightly smaller to fit 6 knobs
         int labelHeight = 12;
-        int labelWidth = 80;
-        int numKnobs = 5;  // Attack, Release, Hold, Breath, Transient
+        int labelWidth = 70;
+        int numKnobs = 6;  // Attack, Release, Hold, Breath, Transient, Noise Floor
         
-        // Reserve space for output trim fader on right (narrower)
-        int faderWidth = 16;  // Narrower fader
+        // Reserve space for output trim fader on right
         int faderAreaWidth = 50;  // Fader + labels on right
         auto knobArea = advContent.withTrimmedRight(faderAreaWidth);
         auto faderArea = advContent.removeFromRight(faderAreaWidth);
@@ -1138,26 +1381,33 @@ void VocalRiderAudioProcessorEditor::resized()
         
         transientPreservationSlider.setBounds(x, y, advKnobSize, advKnobSize);
         transientLabel.setBounds(x - (labelWidth - advKnobSize) / 2, y + advKnobSize + 2, labelWidth, labelHeight);
+        x += advKnobSize + spacing;
         
-        // RIGHT SIDE: Output Trim Vertical Fader (narrower, with more bottom padding)
-        int faderHeight = advKnobSize;  // Same height as knobs
-        int faderX = faderArea.getX() + 4;  // Left side of fader area
-        int faderY = y;
+        noiseFloorSlider.setBounds(x, y, advKnobSize, advKnobSize);
+        noiseFloorLabel.setBounds(x - (labelWidth - advKnobSize) / 2, y + advKnobSize + 2, labelWidth, labelHeight);
         
-        outputTrimMeter.setBounds(faderX, faderY, faderWidth, faderHeight);
-        outputTrimLabel.setBounds(faderArea.getX(), faderY + faderHeight + 4, faderAreaWidth, labelHeight);  // More padding
+        // RIGHT SIDE: Output Trim Vertical Fader (spans FULL advanced panel height)
+        // Use advArea bounds directly so the fader isn't limited by the knob row
+        int faderW = 16;
+        int faderX = faderArea.getX() + (faderAreaWidth - faderW) / 2;
+        int faderY = advArea.getY() + 10;  // Start near the very top of the panel
+        int faderBottom = advArea.getBottom() - 10 - labelHeight - 2;  // Near panel bottom, leave label room
+        int faderHeight = faderBottom - faderY;
+        
+        outputTrimMeter.setBounds(faderX, faderY, faderW, faderHeight);
+        outputTrimLabel.setBounds(faderArea.getX(), faderBottom + 2, faderAreaWidth, labelHeight);
         
         // Position trim range labels on the RIGHT side of the fader
         int trimLabelW = 22;
         int trimLabelH = 10;
-        int labelX = faderX + faderWidth + 2;  // Labels on RIGHT side
+        int trimLabelX = faderX + faderW + 1;
         
         // +12 at top of fader (right side)
-        trimMaxLabel.setBounds(labelX, faderY - 1, trimLabelW, trimLabelH);
+        trimMaxLabel.setBounds(trimLabelX, faderY + 8, trimLabelW, trimLabelH);
         // 0 in middle of fader (right side)
-        trimMidLabel.setBounds(labelX, faderY + faderHeight / 2 - trimLabelH / 2, trimLabelW, trimLabelH);
+        trimMidLabel.setBounds(trimLabelX, faderY + faderHeight / 2 - trimLabelH / 2, trimLabelW, trimLabelH);
         // -12 at bottom of fader (right side)
-        trimMinLabel.setBounds(labelX, faderY + faderHeight - trimLabelH + 1, trimLabelW, trimLabelH);
+        trimMinLabel.setBounds(trimLabelX, faderY + faderHeight - trimLabelH - 8, trimLabelW, trimLabelH);
     }
     
     // Waveform fills area below header and above bottom bar (transparent control area)
@@ -1193,6 +1443,7 @@ void VocalRiderAudioProcessorEditor::resized()
     rangeSlider.setBounds(rangeX, knobY + 8, smallKnobSize, smallKnobSize);
     rangeLabel.setBounds(rangeX, knobY + 8 + smallKnobSize + 2, smallKnobSize, labelHeight);
     
+    
     // Speed to the right - LABEL BELOW knob
     speedSlider.setBounds(speedX, knobY + 8, smallKnobSize, smallKnobSize);
     speedLabel.setBounds(speedX, knobY + 8 + smallKnobSize + 2, smallKnobSize, labelHeight);
@@ -1220,8 +1471,9 @@ void VocalRiderAudioProcessorEditor::resized()
     // Natural and Silence toggles now in bottom bar (positioned elsewhere)
     
     // About dialog covers entire window (for click-to-close overlay)
+    // Only update bounds - do NOT call toFront() here as it disrupts z-order
+    // of header buttons. toFront() is called in aboutDialog.show() instead.
     aboutDialog.setBounds(getLocalBounds());
-    aboutDialog.toFront(false);  // Keep on top
 }
 
 void VocalRiderAudioProcessorEditor::timerCallback()
@@ -1250,9 +1502,40 @@ void VocalRiderAudioProcessorEditor::timerCallback()
     waveformDisplay.setInputLevel(audioProcessor.getInputLevelDb());
     waveformDisplay.setOutputLevel(audioProcessor.getOutputLevelDb());
     
-    // Update Natural Mode phrase indicator
-    waveformDisplay.setNaturalModeEnabled(audioProcessor.isNaturalModeEnabled());
-    waveformDisplay.setInPhrase(audioProcessor.isInPhrase());
+    // Natural Mode indicator: label visible when toggle is ON,
+    // green dot reflects actual phrase detection from audio thread
+    bool naturalEnabled = audioProcessor.isNaturalModeEnabled();
+    waveformDisplay.setNaturalModeEnabled(naturalEnabled);
+    
+    if (!naturalEnabled)
+    {
+        waveformDisplay.setInPhrase(false);
+        phraseIndicatorSilenceCount = 0;
+    }
+    else
+    {
+        // Track silence to handle DAW stop (processBlock stops being called)
+        float currentInputForPhrase = audioProcessor.getInputLevelDb();
+        if (currentInputForPhrase < -50.0f)
+        {
+            phraseIndicatorSilenceCount++;
+            if (phraseIndicatorSilenceCount > 30)  // ~500ms at 60Hz
+                waveformDisplay.setInPhrase(false);
+            else
+                waveformDisplay.setInPhrase(audioProcessor.isInPhrase());
+        }
+        else
+        {
+            phraseIndicatorSilenceCount = 0;
+            waveformDisplay.setInPhrase(audioProcessor.isInPhrase());
+        }
+    }
+    
+    
+    // Update noise floor display
+    float nfDb = audioProcessor.getNoiseFloor();
+    waveformDisplay.setNoiseFloorDb(nfDb);
+    waveformDisplay.setNoiseFloorActive(nfDb > -59.9f);
     
     if (auto* param = audioProcessor.getApvts().getRawParameterValue(VocalRiderAudioProcessor::targetLevelParamId))
         waveformDisplay.setTargetLevel(param->load());
@@ -1314,7 +1597,7 @@ void VocalRiderAudioProcessorEditor::timerCallback()
                 // Set target to average level (where vocal typically sits)
                 // Only adjusts target - leaves range and speed untouched
                 float targetLevel = juce::jlimit(-40.0f, -6.0f, avgDb);
-                if (auto* param = audioProcessor.getApvts().getParameter("targetLevel"))
+                if (auto* param = audioProcessor.getApvts().getParameter(VocalRiderAudioProcessor::targetLevelParamId))
                     param->setValueNotifyingHost(param->convertTo0to1(targetLevel));
                     
                 // Update the UI
@@ -1328,41 +1611,27 @@ void VocalRiderAudioProcessorEditor::timerCallback()
         autoTargetButton.setPulsing(false);
     }
     
-    // Hover-based help tooltip: after hovering for 3 seconds, switch to help mode
-    if (currentHoveredComponent != nullptr)
-    {
-        hoverTimeCounter++;
-        
-        // When we hit exactly the delay threshold, update tooltip to show help text
-        if (hoverTimeCounter == helpHoverDelayTicks)
-        {
-            // Update the tooltip to show help text for the hovered component
-            if (currentHoveredComponent == &targetSlider) {
-                valueTooltip.showValue("TARGET", getHelpText("TARGET"), &targetSlider, false, true);
-            } else if (currentHoveredComponent == &rangeSlider) {
-                valueTooltip.showValue("RANGE", getHelpText("RANGE"), &rangeSlider, false, true);
-            } else if (currentHoveredComponent == &speedSlider) {
-                valueTooltip.showValue("SPEED", getHelpText("SPEED"), &speedSlider, false, true);
-            } else if (currentHoveredComponent == &attackSlider) {
-                valueTooltip.showValue("ATTACK", getHelpText("ATTACK"), &attackSlider, false, true);
-            } else if (currentHoveredComponent == &releaseSlider) {
-                valueTooltip.showValue("RELEASE", getHelpText("RELEASE"), &releaseSlider, false, true);
-            } else if (currentHoveredComponent == &holdSlider) {
-                valueTooltip.showValue("HOLD", getHelpText("HOLD"), &holdSlider, false, true);
-            } else if (currentHoveredComponent == &breathReductionSlider) {
-                valueTooltip.showValue("BREATH", getHelpText("BREATH"), &breathReductionSlider, false, true);
-            } else if (currentHoveredComponent == &transientPreservationSlider) {
-                valueTooltip.showValue("TRANSIENT", getHelpText("TRANSIENT"), &transientPreservationSlider, false, true);
-            } else if (currentHoveredComponent == &outputTrimMeter) {
-                valueTooltip.showValue("OUTPUT", getHelpText("OUTPUT"), &outputTrimMeter, false, true);
-            } else if (currentHoveredComponent == &naturalToggle) {
-                valueTooltip.showValue("NATURAL", getHelpText("NATURAL"), &naturalToggle, false, true);
-            } else if (currentHoveredComponent == &silenceToggle) {
-                valueTooltip.showValue("SILENCE", getHelpText("SILENCE"), &silenceToggle, false, true);
-            } else if (currentHoveredComponent == &autoTargetButton) {
-                valueTooltip.showValue("AUTO-TARGET", getHelpText("AUTOTARGET"), &autoTargetButton, false, true);
-            }
-        }
+    // Hover tracking is now only for value tooltip display
+    
+    // Continuous tooltip update during drag for advanced sliders
+    // (handles potential conflicts with APVTS SliderAttachment overriding onValueChange)
+    if (attackSlider.isMouseButtonDown())
+        valueTooltip.showValue("ATTACK", juce::String(static_cast<int>(attackSlider.getValue())) + " ms", &attackSlider);
+    else if (releaseSlider.isMouseButtonDown())
+        valueTooltip.showValue("RELEASE", juce::String(static_cast<int>(releaseSlider.getValue())) + " ms", &releaseSlider);
+    else if (holdSlider.isMouseButtonDown())
+        valueTooltip.showValue("HOLD", juce::String(static_cast<int>(holdSlider.getValue())) + " ms", &holdSlider);
+    else if (breathReductionSlider.isMouseButtonDown()) {
+        double val = breathReductionSlider.getValue();
+        juce::String valStr = (val > 0.05 ? "-" : "") + juce::String(val, 1) + " dB";
+        valueTooltip.showValue("BREATH", valStr, &breathReductionSlider);
+    }
+    else if (transientPreservationSlider.isMouseButtonDown())
+        valueTooltip.showValue("TRANSIENT", juce::String(static_cast<int>(transientPreservationSlider.getValue())) + "%", &transientPreservationSlider);
+    else if (noiseFloorSlider.isMouseButtonDown()) {
+        juce::String valStr = juce::String(noiseFloorSlider.getValue(), 1) + " dB";
+        if (noiseFloorSlider.getValue() <= -59.9) valStr = "OFF";
+        valueTooltip.showValue("NOISE FLOOR", valStr, &noiseFloorSlider);
     }
     
     // Hide tooltip when no slider is being interacted with
@@ -1374,11 +1643,13 @@ void VocalRiderAudioProcessorEditor::timerCallback()
                            holdSlider.isMouseOverOrDragging() ||
                            breathReductionSlider.isMouseOverOrDragging() ||
                            transientPreservationSlider.isMouseOverOrDragging() ||
+                           noiseFloorSlider.isMouseOverOrDragging() ||
                            outputTrimMeter.isMouseOver();
     if (!anySliderActive && valueTooltip.isShowing() && currentHoveredComponent == nullptr)
     {
         valueTooltip.hideTooltip();
     }
+    
 
 }
 
@@ -1425,6 +1696,7 @@ VocalRiderAudioProcessorEditor::ParameterState VocalRiderAudioProcessorEditor::g
     state.breathReduction = static_cast<float>(breathReductionSlider.getValue());
     state.transientPreservation = static_cast<float>(transientPreservationSlider.getValue());
     state.outputTrim = outputTrimMeter.getValue();
+    state.noiseFloor = static_cast<float>(noiseFloorSlider.getValue());
     return state;
 }
 
@@ -1439,6 +1711,7 @@ void VocalRiderAudioProcessorEditor::applyState(const ParameterState& state)
     breathReductionSlider.setValue(state.breathReduction, juce::sendNotification);
     transientPreservationSlider.setValue(state.transientPreservation, juce::sendNotification);
     outputTrimMeter.setValue(state.outputTrim);
+    noiseFloorSlider.setValue(state.noiseFloor, juce::sendNotification);
 }
 
 void VocalRiderAudioProcessorEditor::saveStateForUndo()
@@ -1495,6 +1768,8 @@ juce::String VocalRiderAudioProcessorEditor::getHelpText(const juce::String& con
         return "Reduces gain on breaths.\nHigher = more breath reduction.";
     if (controlName == "TRANSIENT")
         return "Preserves vocal attacks.\nHigher = less gain on transients.";
+    if (controlName == "NOISEFLOOR")
+        return "Ignore audio below threshold.\nDrag up to set noise floor level.";
     if (controlName == "OUTPUT")
         return "Makeup gain after riding.\nBoost or cut overall level.";
     if (controlName == "NATURAL")
@@ -1511,5 +1786,35 @@ juce::String VocalRiderAudioProcessorEditor::getHelpText(const juce::String& con
         return "Output level meter.\nShows level after gain riding.";
     if (controlName == "GAIN_METER")
         return "Current gain adjustment.\nGreen = boost, Purple = cut.";
+    return "";
+}
+
+void VocalRiderAudioProcessorEditor::setStatusBarText(const juce::String& text)
+{
+    footerLabel.setText(text, juce::dontSendNotification);
+    footerLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getDimTextColour());
+}
+
+void VocalRiderAudioProcessorEditor::clearStatusBarText()
+{
+    footerLabel.setText(versionString, juce::dontSendNotification);
+    footerLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getVeryDimTextColour());
+}
+
+juce::String VocalRiderAudioProcessorEditor::getShortHelpText(const juce::String& controlName)
+{
+    if (controlName == "TARGET")    return "Target level for your vocal loudness";
+    if (controlName == "RANGE")     return "Maximum gain adjustment (+/- dB)";
+    if (controlName == "SPEED")     return "How quickly gain responds to changes";
+    if (controlName == "ATTACK")    return "Gain increase speed when vocal gets louder";
+    if (controlName == "RELEASE")   return "Gain decrease speed when vocal gets quieter";
+    if (controlName == "HOLD")      return "Hold time before release - prevents pumping";
+    if (controlName == "BREATH")    return "Reduces gain on breaths and sibilance";
+    if (controlName == "TRANSIENT") return "Preserves vocal attacks and consonants";
+    if (controlName == "NOISEFLOOR") return "Ignore audio below this threshold";
+    if (controlName == "OUTPUT")    return "Makeup gain after riding (+/- 12 dB)";
+    if (controlName == "NATURAL")   return "Phrase-based processing for smoother results";
+    if (controlName == "SILENCE")   return "Reduces gain on silent sections (-6 dB)";
+    if (controlName == "AUTOTARGET") return "Auto-analyze audio to set target level";
     return "";
 }
