@@ -207,6 +207,10 @@ private:
     // For waveform interpolation
     SampleData lastDrawnData;
     bool hasLastDrawnData = false;
+    
+    // Raw sample data history (one per column, for rebuilding on zoom changes)
+    std::vector<SampleData> columnRawData;
+    void rebuildWaveformFromRawData();
 
     // Parameters (separate boost and cut)
     std::atomic<float> targetLevelDb { -18.0f };
@@ -234,6 +238,17 @@ private:
     
     // Range lock (when true, dragging one handle moves both)
     std::atomic<bool> rangeLocked { true };
+    
+    // Adaptive display zoom — centers view around the target level
+    float displayFloor = -64.0f;       // Current bottom of display (dB)
+    float displayCeiling = 6.0f;       // Current top of display (dB)
+    float displayFloorTarget = -64.0f; // Smoothing target
+    float displayCeilingTarget = 6.0f;
+    static constexpr float adaptiveMargin = 20.0f;  // dB above/below target to show
+    static constexpr float adaptiveFloorMin = -64.0f;
+    static constexpr float adaptiveCeilingMax = 6.0f;
+    static constexpr float adaptiveSmoothCoeff = 0.03f;  // Slow smooth (~2s settle)
+    void updateAdaptiveZoom();
     
     // Flag: static elements (target/range/noise floor) changed, force repaint even without audio
     std::atomic<bool> staticElementsChanged { false };  // Also triggers staticOverlayNeedsRedraw

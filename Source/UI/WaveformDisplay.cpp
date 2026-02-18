@@ -77,6 +77,9 @@ void WaveformDisplay::initializeWaveformImage()
         outputTopBuffer.assign(static_cast<size_t>(imageWidth), defaultY);
         outputBottomBuffer.assign(static_cast<size_t>(imageWidth), defaultY);
         
+        // Raw data history for rebuilding on zoom changes
+        columnRawData.assign(static_cast<size_t>(imageWidth), SampleData{});
+        
         // Reset scroll state
         scrollAccumulator = 0.0;
         
@@ -95,16 +98,18 @@ float WaveformDisplay::linearToLogY(float linear, float areaHeight) const
     if (linear <= 0.00001f || !std::isfinite(linear)) return areaHeight;
     float db = 20.0f * std::log10(linear);
     if (!std::isfinite(db)) return areaHeight;
-    // Extended range: -64dB at bottom, +6dB at top (70dB total range)
-    float normalized = (db - (-64.0f)) / (6.0f - (-64.0f));
+    float range = displayCeiling - displayFloor;
+    if (range < 1.0f) range = 1.0f;
+    float normalized = (db - displayFloor) / range;
     normalized = juce::jlimit(0.0f, 1.0f, normalized);
     return areaHeight - normalized * areaHeight;
 }
 
 float WaveformDisplay::dbToY(float db) const
 {
-    // Extended range: -64dB at bottom, +6dB at top
-    float normalized = (db - (-64.0f)) / (6.0f - (-64.0f));
+    float range = displayCeiling - displayFloor;
+    if (range < 1.0f) range = 1.0f;
+    float normalized = (db - displayFloor) / range;
     normalized = juce::jlimit(0.0f, 1.0f, normalized);
     return waveformArea.getBottom() - normalized * waveformArea.getHeight();
 }
@@ -112,10 +117,10 @@ float WaveformDisplay::dbToY(float db) const
 float WaveformDisplay::yToDb(float y) const
 {
     float h = waveformArea.getHeight();
-    if (h < 1.0f) return -64.0f;
+    if (h < 1.0f) return displayFloor;
     float normalized = (waveformArea.getBottom() - y) / h;
     normalized = juce::jlimit(0.0f, 1.0f, normalized);
-    return -64.0f + normalized * (6.0f - (-64.0f));
+    return displayFloor + normalized * (displayCeiling - displayFloor);
 }
 
 float WaveformDisplay::gainDbToY(float gainDb) const
@@ -124,7 +129,7 @@ float WaveformDisplay::gainDbToY(float gainDb) const
     float boost = boostRangeDb.load();
     float cut = cutRangeDb.load();
     float clampedGain = juce::jlimit(-cut, boost, gainDb);
-    float effectiveDb = juce::jlimit(-64.0f, 6.0f, target + clampedGain);
+    float effectiveDb = juce::jlimit(displayFloor, displayCeiling, target + clampedGain);
     return dbToY(effectiveDb);
 }
 
@@ -134,11 +139,56 @@ float WaveformDisplay::gainDbToImageY(float gainDb, float imgHeight) const
     float boost = boostRangeDb.load();
     float cut = cutRangeDb.load();
     float clampedGain = juce::jlimit(-cut, boost, gainDb);
-    float effectiveDb = juce::jlimit(-64.0f, 6.0f, target + clampedGain);
-    // Extended range: -64dB at bottom, +6dB at top
-    float normalized = (effectiveDb - (-64.0f)) / (6.0f - (-64.0f));
+    float effectiveDb = juce::jlimit(displayFloor, displayCeiling, target + clampedGain);
+    float range = displayCeiling - displayFloor;
+    if (range < 1.0f) range = 1.0f;
+    float normalized = (effectiveDb - displayFloor) / range;
     normalized = juce::jlimit(0.0f, 1.0f, normalized);
     return imgHeight - normalized * imgHeight;
+}
+
+void WaveformDisplay::updateAdaptiveZoom()
+{
+    float target = targetLevelDb.load();
+    float boost = boostRangeDb.load();
+    float cut = cutRangeDb.load();
+    
+    // Show enough range to see target ± margin, plus the boost/cut range lines
+    float neededCeiling = target + boost + 4.0f;
+    float neededFloor = target - cut - 4.0f;
+    
+    // Ensure at least adaptiveMargin dB above and below target
+    neededCeiling = juce::jmax(neededCeiling, target + adaptiveMargin);
+    neededFloor = juce::jmin(neededFloor, target - adaptiveMargin);
+    
+    // Clamp to absolute limits
+    neededCeiling = juce::jmin(neededCeiling, adaptiveCeilingMax);
+    neededFloor = juce::jmax(neededFloor, adaptiveFloorMin);
+    
+    // Ensure minimum 30 dB range for readability
+    float neededRange = neededCeiling - neededFloor;
+    if (neededRange < 30.0f)
+    {
+        float expand = (30.0f - neededRange) / 2.0f;
+        neededCeiling = juce::jmin(neededCeiling + expand, adaptiveCeilingMax);
+        neededFloor = juce::jmax(neededFloor - expand, adaptiveFloorMin);
+    }
+    
+    displayCeilingTarget = neededCeiling;
+    displayFloorTarget = neededFloor;
+    
+    // Smooth transition
+    float prevFloor = displayFloor;
+    float prevCeiling = displayCeiling;
+    displayFloor += (displayFloorTarget - displayFloor) * adaptiveSmoothCoeff;
+    displayCeiling += (displayCeilingTarget - displayCeiling) * adaptiveSmoothCoeff;
+    
+    // If the range changed meaningfully, rebuild waveform positions and redraw overlays
+    if (std::abs(displayFloor - prevFloor) > 0.05f || std::abs(displayCeiling - prevCeiling) > 0.05f)
+    {
+        rebuildWaveformFromRawData();
+        staticOverlayNeedsRedraw = true;
+    }
 }
 
 //==============================================================================
@@ -463,6 +513,23 @@ void WaveformDisplay::shiftWaveformImage(int pixels)
     shiftBuffer(outputTopBuffer, defaultY);
     shiftBuffer(outputBottomBuffer, defaultY);
     shiftBuffer(gainCurveBuffer, 0.0f);
+    
+    // Shift raw data history
+    if (!columnRawData.empty())
+    {
+        if (pixels >= static_cast<int>(columnRawData.size()))
+        {
+            std::fill(columnRawData.begin(), columnRawData.end(), SampleData{});
+        }
+        else
+        {
+            std::memmove(columnRawData.data(), 
+                         columnRawData.data() + pixels,
+                         (columnRawData.size() - static_cast<size_t>(pixels)) * sizeof(SampleData));
+            for (size_t i = columnRawData.size() - static_cast<size_t>(pixels); i < columnRawData.size(); ++i)
+                columnRawData[i] = SampleData{};
+        }
+    }
 }
 
 void WaveformDisplay::storeColumnData(int x, const SampleData& data)
@@ -471,6 +538,10 @@ void WaveformDisplay::storeColumnData(int x, const SampleData& data)
     
     float h = static_cast<float>(imageHeight);
     size_t idx = static_cast<size_t>(x);
+    
+    // Store raw data for rebuilding on zoom changes
+    if (idx < columnRawData.size())
+        columnRawData[idx] = data;
     
     if (idx < gainCurveBuffer.size())
     {
@@ -524,6 +595,62 @@ void WaveformDisplay::storeColumnData(int x, const SampleData& data)
         inputBottomBuffer[idx] = inputBottomY;
         outputTopBuffer[idx] = outputTopY;
         outputBottomBuffer[idx] = outputBottomY;
+    }
+}
+
+void WaveformDisplay::rebuildWaveformFromRawData()
+{
+    if (imageWidth <= 0 || columnRawData.empty()) return;
+    
+    float h = static_cast<float>(imageHeight);
+    float defaultY = h;
+    
+    for (int x = 0; x < imageWidth; ++x)
+    {
+        size_t idx = static_cast<size_t>(x);
+        if (idx >= columnRawData.size()) break;
+        
+        const auto& data = columnRawData[idx];
+        
+        if (idx < gainCurveBuffer.size())
+            gainCurveBuffer[idx] = data.gainDb;
+        
+        float inputTopY = h;
+        float inputBottomY = h;
+        float outputTopY = h;
+        float outputBottomY = h;
+        
+        if (data.inputRms > 0.0001f)
+        {
+            inputTopY = linearToLogY(data.inputRms, h);
+            if (x > 0 && idx < inputTopBuffer.size())
+            {
+                float prevTopY = inputTopBuffer[idx - 1];
+                if (prevTopY < h - 2.0f)
+                    inputTopY = prevTopY * 0.15f + inputTopY * 0.85f;
+            }
+            inputBottomY = juce::jmax(linearToLogY(data.inputRms * 0.5f, h), inputTopY + 2.0f);
+        }
+        
+        if (std::abs(data.gainDb) > 0.3f && data.outputRms > 0.0001f)
+        {
+            outputTopY = linearToLogY(data.outputRms, h);
+            if (x > 0 && idx < outputTopBuffer.size())
+            {
+                float prevOutputY = outputTopBuffer[idx - 1];
+                if (prevOutputY < h - 2.0f)
+                    outputTopY = prevOutputY * 0.15f + outputTopY * 0.85f;
+            }
+            outputBottomY = juce::jmax(linearToLogY(data.outputRms * 0.5f, h), outputTopY + 2.0f);
+        }
+        
+        if (idx < inputTopBuffer.size())
+        {
+            inputTopBuffer[idx] = inputTopY;
+            inputBottomBuffer[idx] = inputBottomY;
+            outputTopBuffer[idx] = outputTopY;
+            outputBottomBuffer[idx] = outputBottomY;
+        }
     }
 }
 
@@ -902,6 +1029,9 @@ void WaveformDisplay::timerCallback()
     // Clamp delta to avoid large jumps (e.g., after returning from idle)
     deltaTime = juce::jmin(deltaTime, 0.04);
     
+    // Update adaptive display zoom (smoothly track target level)
+    updateAdaptiveZoom();
+    
     // Check if we have any pending audio data
     bool hasPendingData = false;
     {
@@ -1181,29 +1311,36 @@ void WaveformDisplay::drawGridLines(juce::Graphics& g)
 {
     if (waveformArea.isEmpty()) return;
     
-    // Grid lines at key dB levels (range extends to -64 but we don't label it)
-    float dbLevels[] = { 0.0f, -6.0f, -12.0f, -18.0f, -24.0f, -36.0f, -48.0f };
+    // Dynamic grid lines based on current adaptive display range
+    float step = 6.0f;
+    float range = displayCeiling - displayFloor;
+    if (range > 50.0f) step = 12.0f;
+    else if (range > 30.0f) step = 6.0f;
+    else step = 3.0f;
     
-    for (float db : dbLevels)
+    float firstLine = std::ceil(displayFloor / step) * step;
+    
+    float labelX = waveformArea.getRight() - 32.0f;
+    g.setFont(CustomLookAndFeel::getPluginFont(11.0f, false));
+    
+    for (float db = firstLine; db <= displayCeiling; db += step)
     {
         float y = dbToY(db);
-        bool isMajor = (db == 0.0f || db == -6.0f || db == -12.0f || db == -18.0f);
+        
+        // Major lines at 0, -6, -12, -18 (or multiples of 12 for large ranges)
+        bool isMajor = (std::fmod(std::abs(db), 6.0f) < 0.1f);
         
         g.setColour(juce::Colour(0xFF3A3F4B).withAlpha(isMajor ? 0.6f : 0.3f));
         g.drawHorizontalLine(static_cast<int>(y), waveformArea.getX(), waveformArea.getRight());
-    }
-    
-    // dB labels on right side
-    float labelX = waveformArea.getRight() - 32.0f;
-    
-    g.setFont(CustomLookAndFeel::getPluginFont(11.0f, false));
-    g.setColour(juce::Colour(0xFFCCCCCC).withAlpha(0.9f));
-    
-    for (float db : dbLevels)
-    {
-        float y = dbToY(db);
-        juce::String label = (db == 0.0f) ? "0" : juce::String(static_cast<int>(db));
-        g.drawText(label, static_cast<int>(labelX), static_cast<int>(y - 7), 28, 14, juce::Justification::centredRight);
+        
+        // Labels
+        if (isMajor)
+        {
+            g.setColour(juce::Colour(0xFFCCCCCC).withAlpha(0.9f));
+            int dbInt = static_cast<int>(std::round(db));
+            juce::String label = (dbInt == 0) ? "0" : juce::String(dbInt);
+            g.drawText(label, static_cast<int>(labelX), static_cast<int>(y - 7), 28, 14, juce::Justification::centredRight);
+        }
     }
 }
 
