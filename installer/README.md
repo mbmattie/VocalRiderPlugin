@@ -82,6 +82,13 @@ The installer places plugins in the user's Library (no admin password required):
 
 ---
 
+## Additional Guides
+
+| Guide | Purpose |
+|------|---------|
+| [docs/AAX_PRO_TOOLS_GUIDE.md](docs/AAX_PRO_TOOLS_GUIDE.md) | Building AAX for Pro Tools and distribution |
+| [docs/WINDOWS_CODE_SIGNING_GUIDE.md](docs/WINDOWS_CODE_SIGNING_GUIDE.md) | Windows code signing to avoid SmartScreen warnings |
+
 ## Files in This Directory
 
 | File | Purpose |

@@ -145,6 +145,10 @@ public:
     void setVocalFocusEnabled(bool enabled) { vocalFocusEnabled.store(enabled); }
     bool isVocalFocusEnabled() const { return vocalFocusEnabled.load(); }
     
+    // Range lock state (linked boost/cut)
+    void setRangeLocked(bool locked) { rangeLocked.store(locked); }
+    bool isRangeLocked() const { return rangeLocked.load(); }
+    
     // Scroll speed for waveform (saved in state)
     void setScrollSpeed(float speed) { scrollSpeedSetting.store(speed); }
     float getScrollSpeed() const { return scrollSpeedSetting.load(); }
@@ -219,6 +223,8 @@ public:
     static const juce::String targetLevelParamId;
     static const juce::String speedParamId;
     static const juce::String rangeParamId;
+    static const juce::String boostRangeParamId;
+    static const juce::String cutRangeParamId;
     static const juce::String gainOutputParamId;
     
     // Advanced parameter IDs
@@ -383,6 +389,8 @@ private:
     std::atomic<float>* targetLevelParam = nullptr;
     std::atomic<float>* speedParam = nullptr;
     std::atomic<float>* rangeParam = nullptr;
+    std::atomic<float>* boostRangeParam = nullptr;
+    std::atomic<float>* cutRangeParam = nullptr;
     
     // Advanced cached parameters
     std::atomic<float>* attackParam = nullptr;
@@ -397,7 +405,8 @@ private:
     
     // Smoothed parameters (to prevent clicks/pops on rapid changes)
     float smoothedTargetLevel = -18.0f;
-    float smoothedRange = 6.0f;  // Default 6dB range
+    float smoothedBoostRange = 6.0f;
+    float smoothedCutRange = 6.0f;
     float paramSmoothingCoeff = 0.85f;  // Computed from sample rate in prepareToPlay (~3ms)
 
     // Metering values (for UI)
@@ -416,6 +425,9 @@ private:
     // the WaveformDisplay is destroyed, to prevent use-after-free on the audio thread.
     std::atomic<WaveformDisplay*> waveformDisplay { nullptr };
 
+    // Range lock state
+    std::atomic<bool> rangeLocked { true };
+    
     // Soft limiter
     static constexpr float ceilingDb = -0.3f;
     // Derived: 10^(ceilingDb/20) -- keep in sync automatically

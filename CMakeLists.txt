@@ -33,6 +33,8 @@ set(PLUGIN_SOURCES
     Source/UI/CustomLookAndFeel.h
     Source/UI/WaveformDisplay.cpp
     Source/UI/WaveformDisplay.h
+    Source/UI/DualRangeKnob.cpp
+    Source/UI/DualRangeKnob.h
 )
 
 # Create the plugin target using juce_add_plugin
@@ -43,8 +45,8 @@ juce_add_plugin(VocalRider
     PLUGIN_MANUFACTURER_CODE Mbma
     PLUGIN_CODE Vrlr
     
-    # Plugin formats to build
-    FORMATS AU VST3 Standalone
+    # Plugin formats to build (AAX enables Pro Tools support)
+    FORMATS AU VST3 AAX Standalone
     
     # Plugin name that appears in the DAW
     PRODUCT_NAME "magic.RIDE"
@@ -104,6 +106,7 @@ if(APPLE)
     # Define plugin destinations
     set(AU_DEST "$ENV{HOME}/Library/Audio/Plug-Ins/Components")
     set(VST3_DEST "$ENV{HOME}/Library/Audio/Plug-Ins/VST3")
+    set(AAX_DEST "/Library/Application Support/Avid/Audio/Plug-Ins")
     
     # Custom target to install plugins
     add_custom_target(install_plugins
@@ -118,9 +121,16 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_BINARY_DIR}/VocalRider_artefacts/VST3/magic.RIDE.vst3"
             "${VST3_DEST}/magic.RIDE.vst3"
-        COMMAND ${CMAKE_COMMAND} -E echo "✓ Plugins installed to system folders"
+        COMMAND ${CMAKE_COMMAND} -E echo "✓ AU and VST3 plugins installed"
+        COMMAND ${CMAKE_COMMAND} -E echo "Installing AAX plugin (may require sudo)..."
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${AAX_DEST}"
+        COMMAND ${CMAKE_COMMAND} -E remove_directory "${AAX_DEST}/magic.RIDE.aaxplugin"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_BINARY_DIR}/VocalRider_artefacts/AAX/magic.RIDE.aaxplugin"
+            "${AAX_DEST}/magic.RIDE.aaxplugin"
+        COMMAND ${CMAKE_COMMAND} -E echo "✓ AAX plugin installed to Avid Plug-Ins folder"
         COMMAND killall -9 AudioComponentRegistrar 2>/dev/null || true
-        DEPENDS VocalRider_AU VocalRider_VST3
-        COMMENT "Installing AU and VST3 plugins to system folders..."
+        DEPENDS VocalRider_AU VocalRider_VST3 VocalRider_AAX
+        COMMENT "Installing AU, VST3, and AAX plugins to system folders..."
     )
 endif()

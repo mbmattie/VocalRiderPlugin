@@ -53,6 +53,7 @@ fi
 
 AU_SOURCE="${BUILD_DIR}/AU/${PLUGIN_NAME}.component"
 VST3_SOURCE="${BUILD_DIR}/VST3/${PLUGIN_NAME}.vst3"
+AAX_SOURCE="${BUILD_DIR}/AAX/${PLUGIN_NAME}.aaxplugin"
 
 # Verify source plugins exist
 if [ ! -d "$AU_SOURCE" ]; then
@@ -67,9 +68,20 @@ if [ ! -d "$VST3_SOURCE" ]; then
     exit 1
 fi
 
+# AAX is optional (not all builds include it)
+HAS_AAX=false
+if [ -d "$AAX_SOURCE" ]; then
+    HAS_AAX=true
+fi
+
 echo "Found plugins:"
 echo "  AU:   $AU_SOURCE"
 echo "  VST3: $VST3_SOURCE"
+if [ "$HAS_AAX" = true ]; then
+    echo "  AAX:  $AAX_SOURCE"
+else
+    echo "  AAX:  (not found, skipping)"
+fi
 echo ""
 
 # Clean and create staging directories
@@ -79,11 +91,17 @@ mkdir -p "$STAGING_DIR/au"
 mkdir -p "$STAGING_DIR/vst3"
 mkdir -p "$STAGING_DIR/scripts"
 mkdir -p "$OUTPUT_DIR"
+if [ "$HAS_AAX" = true ]; then
+    mkdir -p "$STAGING_DIR/aax"
+fi
 
 # Copy plugins to staging
 echo "Copying plugins to staging area..."
 cp -R "$AU_SOURCE" "$STAGING_DIR/au/"
 cp -R "$VST3_SOURCE" "$STAGING_DIR/vst3/"
+if [ "$HAS_AAX" = true ]; then
+    cp -R "$AAX_SOURCE" "$STAGING_DIR/aax/"
+fi
 
 # Create post-install script (resets AU cache)
 cat > "$STAGING_DIR/scripts/postinstall" << 'EOF'
@@ -121,7 +139,29 @@ pkgbuild \
     --version "$VERSION" \
     "$STAGING_DIR/vst3-component.pkg"
 
+# AAX Package (installs to Avid Plug-Ins folder for Pro Tools)
+if [ "$HAS_AAX" = true ]; then
+    pkgbuild \
+        --root "$STAGING_DIR/aax" \
+        --install-location "/Library/Application Support/Avid/Audio/Plug-Ins" \
+        --identifier "${IDENTIFIER}.aax" \
+        --version "$VERSION" \
+        "$STAGING_DIR/aax-component.pkg"
+fi
+
 # Create distribution XML
+if [ "$HAS_AAX" = true ]; then
+    AAX_CHOICE_LINE='            <line choice="aax"/>'
+    AAX_CHOICE_DEF="    <choice id=\"aax\" visible=\"false\">
+        <pkg-ref id=\"${IDENTIFIER}.aax\"/>
+    </choice>"
+    AAX_PKG_REF="    <pkg-ref id=\"${IDENTIFIER}.aax\" version=\"${VERSION}\" onConclusion=\"none\">aax-component.pkg</pkg-ref>"
+else
+    AAX_CHOICE_LINE=""
+    AAX_CHOICE_DEF=""
+    AAX_PKG_REF=""
+fi
+
 cat > "$STAGING_DIR/distribution.xml" << EOF
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="1">
@@ -137,6 +177,7 @@ cat > "$STAGING_DIR/distribution.xml" << EOF
         <line choice="default">
             <line choice="au"/>
             <line choice="vst3"/>
+${AAX_CHOICE_LINE}
         </line>
     </choices-outline>
     
@@ -147,27 +188,31 @@ cat > "$STAGING_DIR/distribution.xml" << EOF
     <choice id="vst3" visible="false">
         <pkg-ref id="${IDENTIFIER}.vst3"/>
     </choice>
+${AAX_CHOICE_DEF}
     
     <pkg-ref id="${IDENTIFIER}.au" version="${VERSION}" onConclusion="none">au-component.pkg</pkg-ref>
     <pkg-ref id="${IDENTIFIER}.vst3" version="${VERSION}" onConclusion="none">vst3-component.pkg</pkg-ref>
+${AAX_PKG_REF}
 </installer-gui-script>
 EOF
 
 # Create resources directory
 mkdir -p "$STAGING_DIR/resources"
 
-# Create welcome HTML
+# Create welcome HTML (with dark mode support - prevents white-on-white text in dark mode)
 cat > "$STAGING_DIR/resources/welcome.html" << EOF
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
+    <meta name="color-scheme" content="light dark">
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             padding: 20px;
             line-height: 1.6;
             color: #333;
+            background-color: #fff;
         }
         h1 { color: #7B5CAD; margin-bottom: 10px; }
         .version { color: #666; font-size: 14px; margin-bottom: 20px; }
@@ -178,6 +223,12 @@ cat > "$STAGING_DIR/resources/welcome.html" << EOF
             border-radius: 6px; 
             margin-top: 20px;
             font-size: 13px;
+        }
+        @media (prefers-color-scheme: dark) {
+            body { color: #e0e0e0; background-color: #1e1e1e; }
+            h1 { color: #b08cde; }
+            .version { color: #a0a0a0; }
+            .note { background: #2d2d2d; color: #e0e0e0; }
         }
     </style>
 </head>
@@ -191,6 +242,7 @@ cat > "$STAGING_DIR/resources/welcome.html" << EOF
     <ul>
         <li>Audio Unit (AU) plugin</li>
         <li>VST3 plugin</li>
+        <li>AAX plugin (for Pro Tools)</li>
     </ul>
     
     <p>The plugins will be installed to the system Library folder for maximum DAW compatibility. An administrator password may be required.</p>
@@ -202,18 +254,20 @@ cat > "$STAGING_DIR/resources/welcome.html" << EOF
 </html>
 EOF
 
-# Create conclusion HTML
+# Create conclusion HTML (with dark mode support - prevents white-on-white text in dark mode)
 cat > "$STAGING_DIR/resources/conclusion.html" << EOF
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
+    <meta name="color-scheme" content="light dark">
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             padding: 20px;
             line-height: 1.6;
             color: #333;
+            background-color: #fff;
         }
         h1 { color: #4CAF50; margin-bottom: 10px; }
         .path {
@@ -230,6 +284,14 @@ cat > "$STAGING_DIR/resources/conclusion.html" << EOF
             border-radius: 6px;
             margin-top: 20px;
         }
+        .thanks { margin-top: 20px; color: #666; }
+        @media (prefers-color-scheme: dark) {
+            body { color: #e0e0e0; background-color: #1e1e1e; }
+            h1 { color: #66bb6a; }
+            .path { background: #2d2d2d; color: #e0e0e0; }
+            .tip { background: #1b3d1f; color: #e0e0e0; }
+            p, .thanks { color: #e0e0e0; }
+        }
     </style>
 </head>
 <body>
@@ -240,17 +302,18 @@ cat > "$STAGING_DIR/resources/conclusion.html" << EOF
     <p><strong>Installation locations:</strong></p>
     <div class="path">/Library/Audio/Plug-Ins/Components/magic.RIDE.component</div>
     <div class="path">/Library/Audio/Plug-Ins/VST3/magic.RIDE.vst3</div>
+    <div class="path">/Library/Application Support/Avid/Audio/Plug-Ins/magic.RIDE.aaxplugin</div>
     
     <div class="tip">
         <strong>Next steps:</strong>
         <ol>
-            <li>Open your DAW (Logic Pro, Ableton, etc.)</li>
+            <li>Open your DAW (Logic Pro, Ableton, Pro Tools, etc.)</li>
             <li>Rescan plugins if needed</li>
             <li>Find magic.RIDE in your plugin list</li>
         </ol>
     </div>
     
-    <p style="margin-top: 20px; color: #666;">Thank you for installing magic.RIDE!</p>
+    <p class="thanks">Thank you for installing magic.RIDE!</p>
 </body>
 </html>
 EOF

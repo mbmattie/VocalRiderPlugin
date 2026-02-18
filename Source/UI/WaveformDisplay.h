@@ -58,6 +58,9 @@ public:
     // Combined range setter (for backwards compat)
     void setRange(float rangeDb);
     
+    // Range lock state for drag behavior
+    void setRangeLocked(bool locked) { rangeLocked.store(locked); }
+    
     // Scroll speed is now fixed at 8 seconds
     
     // Current gain for external access
@@ -113,10 +116,9 @@ private:
     //==============================================================================
     struct SampleData
     {
-        float inputMin = 0.0f;      // Min input level in block (0-1)
-        float inputMax = 0.0f;      // Max input level in block (0-1)
-        float outputMin = 0.0f;     // Min output level in block
-        float outputMax = 0.0f;     // Max output level in block
+        float inputRms = 0.0f;      // Input RMS level (linear 0-1)
+        float inputPeak = 0.0f;     // Input peak level for faint outline
+        float outputRms = 0.0f;     // Output RMS level (linear 0-1)
         float gainDb = 0.0f;        // Average gain adjustment in dB
     };
 
@@ -196,10 +198,9 @@ private:
     // Data capture - samples per buffer entry (smaller = more resolution)
     static constexpr int samplesPerEntry = 256;  // Block size for visual sampling
     int sampleCounter = 0;
-    float currentInputMin = 1.0f;   // Track min (start high)
-    float currentInputMax = 0.0f;   // Track max (start low)
-    float currentOutputMin = 1.0f;
-    float currentOutputMax = 0.0f;
+    float currentInputSumSq = 0.0f;    // Sum of squared input samples (for RMS)
+    float currentInputPeak = 0.0f;     // Peak input level (for faint outline)
+    float currentOutputSumSq = 0.0f;   // Sum of squared output samples (for RMS)
     float currentGainSum = 0.0f;
     int gainSampleCount = 0;
     
@@ -230,6 +231,9 @@ private:
     // Noise floor indicator
     std::atomic<float> noiseFloorDb { -100.0f };
     std::atomic<bool> noiseFloorActive { false };
+    
+    // Range lock (when true, dragging one handle moves both)
+    std::atomic<bool> rangeLocked { true };
     
     // Flag: static elements (target/range/noise floor) changed, force repaint even without audio
     std::atomic<bool> staticElementsChanged { false };  // Also triggers staticOverlayNeedsRedraw
@@ -285,7 +289,7 @@ private:
     std::atomic<int> clippingSampleCount { 0 };
 
     // Visual settings
-    static constexpr float handleHitDistance = 12.0f;
+    static constexpr float handleHitDistance = 18.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(WaveformDisplay)
 };

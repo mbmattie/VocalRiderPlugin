@@ -46,6 +46,7 @@ fi
 
 AU_PATH="${BUILD_DIR}/AU/${PLUGIN_NAME}.component"
 VST3_PATH="${BUILD_DIR}/VST3/${PLUGIN_NAME}.vst3"
+AAX_PATH="${BUILD_DIR}/AAX/${PLUGIN_NAME}.aaxplugin"
 
 echo "========================================"
 echo "  Signing and Notarizing ${PLUGIN_NAME}"
@@ -85,6 +86,12 @@ sign_plugin() {
 echo "Step 1: Signing plugins..."
 sign_plugin "$AU_PATH"
 sign_plugin "$VST3_PATH"
+if [ -d "$AAX_PATH" ]; then
+    sign_plugin "$AAX_PATH"
+    echo "  Note: AAX also requires PACE/iLok signing for Pro Tools. See docs/AAX_PRO_TOOLS_GUIDE.md"
+else
+    echo "  AAX plugin not found (skipping)"
+fi
 echo ""
 
 # Build installer

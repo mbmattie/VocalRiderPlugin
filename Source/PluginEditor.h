@@ -18,6 +18,7 @@
 #include "PluginProcessor.h"
 #include "UI/CustomLookAndFeel.h"
 #include "UI/WaveformDisplay.h"
+#include "UI/DualRangeKnob.h"
 
 //==============================================================================
 // Animated Value Tooltip - appears below knobs with fade animation
@@ -83,8 +84,11 @@ public:
         if (currentSource == nullptr || getParentComponent() == nullptr) return;
         
         // Calculate tooltip size based on content
-        int tooltipWidth = helpMode ? 170 : 68;  // Wider for larger text
-        int tooltipHeight = helpMode ? 56 : 36;  // Taller for larger text
+        int tooltipWidth = helpMode ? 170 : 68;
+        // Widen when showing +/- dB range values
+        if (!helpMode && currentValue.contains("/"))
+            tooltipWidth = 100;
+        int tooltipHeight = helpMode ? 56 : 36;
         
         // Get source bounds relative to parent (works correctly with scaling transforms)
         auto sourceBounds = getParentComponent()->getLocalArea(currentSource, currentSource->getLocalBounds());
@@ -1803,6 +1807,8 @@ private:
     void toggleAdvancedPanel();
     void updateAdvancedControls();
     void updateGainStats();
+    void updateRangeLabel();
+    juce::String getRangeTooltipText() const;
     void setWindowSize(WindowSize size);
     void setScale(int scalePercent);
 
@@ -1849,7 +1855,11 @@ private:
     
     // Main knobs: Target (large, center), Range and Speed (smaller, sides)
     TooltipSlider targetSlider;
-    TooltipSlider rangeSlider;
+    DualRangeKnob dualRangeKnob;
+    RangeLockButton rangeLockButton;
+    TooltipSlider rangeSlider;  // Hidden, kept for legacy APVTS attachment
+    TooltipSlider boostRangeSlider;  // Hidden, APVTS-attached
+    TooltipSlider cutRangeSlider;    // Hidden, APVTS-attached
     TooltipSlider speedSlider;
     
     juce::Label targetLabel;
@@ -1888,6 +1898,8 @@ private:
     struct ParameterState {
         float target = -18.0f;
         float range = 6.0f;
+        float boostRange = 6.0f;
+        float cutRange = 6.0f;
         float speed = 50.0f;
         float attack = 10.0f;
         float release = 100.0f;
@@ -1941,6 +1953,8 @@ private:
     // Parameter attachments
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> targetAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> rangeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> boostRangeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> cutRangeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> speedAttachment;
     
     // Advanced parameter attachments

@@ -189,7 +189,23 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     waveformDisplay.onRangeChanged = [this](float newRange) {
         if (auto* param = audioProcessor.getApvts().getParameter(VocalRiderAudioProcessor::rangeParamId))
             param->setValueNotifyingHost(param->convertTo0to1(newRange));
+        if (auto* param = audioProcessor.getApvts().getParameter(VocalRiderAudioProcessor::boostRangeParamId))
+            param->setValueNotifyingHost(param->convertTo0to1(newRange));
+        if (auto* param = audioProcessor.getApvts().getParameter(VocalRiderAudioProcessor::cutRangeParamId))
+            param->setValueNotifyingHost(param->convertTo0to1(newRange));
     };
+    
+    waveformDisplay.onBoostRangeChanged = [this](float newRange) {
+        if (auto* param = audioProcessor.getApvts().getParameter(VocalRiderAudioProcessor::boostRangeParamId))
+            param->setValueNotifyingHost(param->convertTo0to1(newRange));
+    };
+    
+    waveformDisplay.onCutRangeChanged = [this](float newRange) {
+        if (auto* param = audioProcessor.getApvts().getParameter(VocalRiderAudioProcessor::cutRangeParamId))
+            param->setValueNotifyingHost(param->convertTo0to1(newRange));
+    };
+    
+    waveformDisplay.setRangeLocked(audioProcessor.isRangeLocked());
     
 
     //==============================================================================
@@ -240,38 +256,88 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     targetLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(targetLabel);
     
-    // Range knob
+    // Range knob - hidden sliders for APVTS attachment
     setupSliderWithTooltip(rangeSlider, " dB");
-    rangeSlider.onValueChange = [this]() {
-        if (rangeSlider.isMouseOverOrDragging()) {
-            valueTooltip.showValue("RANGE", juce::String(rangeSlider.getValue(), 1) + " dB", &rangeSlider);
+    rangeSlider.setVisible(false);
+    setupSliderWithTooltip(boostRangeSlider, " dB");
+    boostRangeSlider.setVisible(false);
+    setupSliderWithTooltip(cutRangeSlider, " dB");
+    cutRangeSlider.setVisible(false);
+    addChildComponent(rangeSlider);
+    addChildComponent(boostRangeSlider);
+    addChildComponent(cutRangeSlider);
+
+    // Dual range knob (visible, custom component)
+    addAndMakeVisible(dualRangeKnob);
+    dualRangeKnob.setLocked(audioProcessor.isRangeLocked());
+    dualRangeKnob.onBoostChanged = [this](float newVal) {
+        boostRangeSlider.setValue(newVal, juce::sendNotification);
+        if (dualRangeKnob.isLocked())
+        {
+            cutRangeSlider.setValue(newVal, juce::sendNotification);
+            rangeSlider.setValue(newVal, juce::sendNotification);
         }
+        updateRangeLabel();
+        valueTooltip.showValue("RANGE", getRangeTooltipText(), &dualRangeKnob);
     };
-    rangeSlider.onDragEnd = [this]() { saveStateForUndo(); };
-    rangeSlider.onMouseEnter = [this]() {
-        currentHoveredComponent = &rangeSlider;
+    dualRangeKnob.onCutChanged = [this](float newVal) {
+        cutRangeSlider.setValue(newVal, juce::sendNotification);
+        if (dualRangeKnob.isLocked())
+        {
+            boostRangeSlider.setValue(newVal, juce::sendNotification);
+            rangeSlider.setValue(newVal, juce::sendNotification);
+        }
+        updateRangeLabel();
+        valueTooltip.showValue("RANGE", getRangeTooltipText(), &dualRangeKnob);
+    };
+    dualRangeKnob.onDragEnd = [this]() { saveStateForUndo(); };
+    dualRangeKnob.onMouseEnter = [this]() {
+        currentHoveredComponent = &dualRangeKnob;
         setStatusBarText(getShortHelpText("RANGE"));
-        valueTooltip.showValue("RANGE", juce::String(rangeSlider.getValue(), 1) + " dB", &rangeSlider);
+        valueTooltip.showValue("RANGE", getRangeTooltipText(), &dualRangeKnob);
     };
-    rangeSlider.onMouseExit = [this]() {
-        if (currentHoveredComponent == &rangeSlider) { currentHoveredComponent = nullptr; }
+    dualRangeKnob.onMouseExit = [this]() {
+        if (currentHoveredComponent == &dualRangeKnob) { currentHoveredComponent = nullptr; }
         clearStatusBarText();
         valueTooltip.hideTooltip();
     };
-    
+
+    // Lock/unlock button for range
+    addAndMakeVisible(rangeLockButton);
+    rangeLockButton.setLocked(audioProcessor.isRangeLocked());
+    rangeLockButton.onLockChanged = [this](bool isLocked) {
+        audioProcessor.setRangeLocked(isLocked);
+        dualRangeKnob.setLocked(isLocked);
+        if (isLocked)
+        {
+            float avg = (dualRangeKnob.getBoostValue() + dualRangeKnob.getCutValue()) / 2.0f;
+            dualRangeKnob.setBoostValue(avg);
+            dualRangeKnob.setCutValue(avg);
+            boostRangeSlider.setValue(avg, juce::sendNotification);
+            cutRangeSlider.setValue(avg, juce::sendNotification);
+            rangeSlider.setValue(avg, juce::sendNotification);
+        }
+        waveformDisplay.setRangeLocked(isLocked);
+        updateRangeLabel();
+        saveStateForUndo();
+    };
+
     rangeLabel.setText("RANGE", juce::dontSendNotification);
     rangeLabel.setFont(CustomLookAndFeel::getPluginFont(9.0f, true));
     rangeLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getTextColour());
     rangeLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(rangeLabel);
     
-    // Range is always locked (boost/cut always linked)
-    
     // Speed knob
     setupSliderWithTooltip(speedSlider, "%");
     speedSlider.onValueChange = [this] {
-        audioProcessor.updateAttackReleaseFromSpeed(static_cast<float>(speedSlider.getValue()), true);  // true = update UI sliders
-        if (advancedPanelVisible) updateAdvancedControls();
+        // Only update attack/release from speed when the user is actively dragging,
+        // not during programmatic value changes (e.g. state restoration via APVTS attachment)
+        if (speedSlider.isMouseButtonDown())
+        {
+            audioProcessor.updateAttackReleaseFromSpeed(static_cast<float>(speedSlider.getValue()), true);
+            if (advancedPanelVisible) updateAdvancedControls();
+        }
         if (speedSlider.isMouseOverOrDragging()) {
             valueTooltip.showValue("SPEED", juce::String(static_cast<int>(speedSlider.getValue())) + "%", &speedSlider);
         }
@@ -414,6 +480,10 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
         audioProcessor.getApvts(), VocalRiderAudioProcessor::targetLevelParamId, targetSlider);
     rangeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.getApvts(), VocalRiderAudioProcessor::rangeParamId, rangeSlider);
+    boostRangeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getApvts(), VocalRiderAudioProcessor::boostRangeParamId, boostRangeSlider);
+    cutRangeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getApvts(), VocalRiderAudioProcessor::cutRangeParamId, cutRangeSlider);
     speedAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.getApvts(), VocalRiderAudioProcessor::speedParamId, speedSlider);
     
@@ -1036,6 +1106,24 @@ void VocalRiderAudioProcessorEditor::updateGainStats()
 {
 }
 
+void VocalRiderAudioProcessorEditor::updateRangeLabel()
+{
+    // Label always stays "RANGE" — tooltip shows the +/- dB detail
+}
+
+juce::String VocalRiderAudioProcessorEditor::getRangeTooltipText() const
+{
+    if (dualRangeKnob.isLocked())
+    {
+        return juce::String(dualRangeKnob.getBoostValue(), 1) + " dB";
+    }
+    else
+    {
+        return "+" + juce::String(dualRangeKnob.getBoostValue(), 1)
+               + " / -" + juce::String(dualRangeKnob.getCutValue(), 1) + " dB";
+    }
+}
+
 void VocalRiderAudioProcessorEditor::setWindowSize(WindowSize size)
 {
     currentWindowSize = size;
@@ -1439,9 +1527,26 @@ void VocalRiderAudioProcessorEditor::resized()
     int rangeX = centerX - targetKnobSize / 2 - smallKnobSize - spacing;
     int speedX = centerX + targetKnobSize / 2 + spacing;
     
-    // Range to the left - LABEL BELOW knob
-    rangeSlider.setBounds(rangeX, knobY + 8, smallKnobSize, smallKnobSize);
-    rangeLabel.setBounds(rangeX, knobY + 8 + smallKnobSize + 2, smallKnobSize, labelHeight);
+    // Range to the left - LABEL BELOW knob (hidden sliders off-screen)
+    rangeSlider.setBounds(-100, -100, 1, 1);
+    boostRangeSlider.setBounds(-100, -100, 1, 1);
+    cutRangeSlider.setBounds(-100, -100, 1, 1);
+    
+    // Dual range knob (visible) — same size as speed knob for symmetry
+    dualRangeKnob.setBounds(rangeX, knobY + 8, smallKnobSize, smallKnobSize);
+    
+    // RANGE label + lock icon centered under knob, vertically aligned at midpoints
+    int lockSize = 13;
+    int labelTextW = 38;
+    int totalLabelW = labelTextW + lockSize + 3;
+    int labelGroupX = rangeX + (smallKnobSize - totalLabelW) / 2;
+    int labelTopY = knobY + 8 + smallKnobSize + 2;
+    rangeLockButton.setBounds(labelGroupX + labelTextW + 3,
+                              labelTopY + (labelHeight - lockSize) / 2,
+                              lockSize, lockSize);
+    // Align RANGE text midpoint with lock icon midpoint
+    int lockMidY = labelTopY + (labelHeight - lockSize) / 2 + lockSize / 2;
+    rangeLabel.setBounds(labelGroupX, lockMidY - labelHeight / 2, labelTextW, labelHeight);
     
     
     // Speed to the right - LABEL BELOW knob
@@ -1540,12 +1645,24 @@ void VocalRiderAudioProcessorEditor::timerCallback()
     if (auto* param = audioProcessor.getApvts().getRawParameterValue(VocalRiderAudioProcessor::targetLevelParamId))
         waveformDisplay.setTargetLevel(param->load());
     
-    float currentRange = 12.0f;
-    if (auto* param = audioProcessor.getApvts().getRawParameterValue(VocalRiderAudioProcessor::rangeParamId))
+    float currentBoostRange = 6.0f;
+    float currentCutRange = 6.0f;
+    if (auto* param = audioProcessor.getApvts().getRawParameterValue(VocalRiderAudioProcessor::boostRangeParamId))
+        currentBoostRange = param->load();
+    if (auto* param = audioProcessor.getApvts().getRawParameterValue(VocalRiderAudioProcessor::cutRangeParamId))
+        currentCutRange = param->load();
+    
+    waveformDisplay.setBoostRange(currentBoostRange);
+    waveformDisplay.setCutRange(currentCutRange);
+    
+    // Sync DualRangeKnob with APVTS (in case automation or preset changed values)
+    if (!dualRangeKnob.isMouseButtonDown())
     {
-        currentRange = param->load();
-        waveformDisplay.setRange(currentRange);
+        dualRangeKnob.setBoostValue(currentBoostRange);
+        dualRangeKnob.setCutValue(currentCutRange);
     }
+    
+    float currentRange = (currentBoostRange + currentCutRange) / 2.0f;
     
     // Update mini gain meter with decay when no audio
     float currentGain = audioProcessor.getCurrentGainDb();
@@ -1689,6 +1806,8 @@ VocalRiderAudioProcessorEditor::ParameterState VocalRiderAudioProcessorEditor::g
     ParameterState state;
     state.target = static_cast<float>(targetSlider.getValue());
     state.range = static_cast<float>(rangeSlider.getValue());
+    state.boostRange = dualRangeKnob.getBoostValue();
+    state.cutRange = dualRangeKnob.getCutValue();
     state.speed = static_cast<float>(speedSlider.getValue());
     state.attack = static_cast<float>(attackSlider.getValue());
     state.release = static_cast<float>(releaseSlider.getValue());
@@ -1704,6 +1823,10 @@ void VocalRiderAudioProcessorEditor::applyState(const ParameterState& state)
 {
     targetSlider.setValue(state.target, juce::sendNotification);
     rangeSlider.setValue(state.range, juce::sendNotification);
+    dualRangeKnob.setBoostValue(state.boostRange);
+    dualRangeKnob.setCutValue(state.cutRange);
+    boostRangeSlider.setValue(state.boostRange, juce::sendNotification);
+    cutRangeSlider.setValue(state.cutRange, juce::sendNotification);
     speedSlider.setValue(state.speed, juce::sendNotification);
     attackSlider.setValue(state.attack, juce::sendNotification);
     releaseSlider.setValue(state.release, juce::sendNotification);

@@ -205,25 +205,33 @@ void WaveformDisplay::mouseDrag(const juce::MouseEvent& event)
     }
     else if (currentDragTarget == DragTarget::BoostRangeHandle)
     {
-        // Both range handles are connected - move both together
         float newRange = juce::jlimit(0.0f, 12.0f, dragStartValue + deltaDb);
         boostRangeDb.store(newRange);
-        cutRangeDb.store(newRange);
         if (onBoostRangeChanged) onBoostRangeChanged(newRange);
-        if (onCutRangeChanged) onCutRangeChanged(newRange);
-        if (onRangeChanged) onRangeChanged(newRange);
+        
+        if (rangeLocked.load())
+        {
+            cutRangeDb.store(newRange);
+            if (onCutRangeChanged) onCutRangeChanged(newRange);
+            if (onRangeChanged) onRangeChanged(newRange);
+        }
     }
     else if (currentDragTarget == DragTarget::CutRangeHandle)
     {
-        // Both range handles are connected - move both together
         float newRange = juce::jlimit(0.0f, 12.0f, dragStartValue - deltaDb);
-        boostRangeDb.store(newRange);
         cutRangeDb.store(newRange);
-        if (onBoostRangeChanged) onBoostRangeChanged(newRange);
         if (onCutRangeChanged) onCutRangeChanged(newRange);
-        if (onRangeChanged) onRangeChanged(newRange);
+        
+        if (rangeLocked.load())
+        {
+            boostRangeDb.store(newRange);
+            if (onBoostRangeChanged) onBoostRangeChanged(newRange);
+            if (onRangeChanged) onRangeChanged(newRange);
+        }
     }
     
+    // Force cached overlay to redraw with new line positions
+    staticOverlayNeedsRedraw = true;
     repaint();
 }
 
@@ -257,12 +265,16 @@ void WaveformDisplay::setTargetLevel(float targetDb)
 
 void WaveformDisplay::setBoostRange(float db)
 {
-    boostRangeDb.store(juce::jlimit(0.0f, 12.0f, db));
+    float clamped = juce::jlimit(0.0f, 12.0f, db);
+    float prev = boostRangeDb.exchange(clamped);
+    if (std::abs(prev - clamped) > 0.1f) staticElementsChanged = true;
 }
 
 void WaveformDisplay::setCutRange(float db)
 {
-    cutRangeDb.store(juce::jlimit(0.0f, 12.0f, db));
+    float clamped = juce::jlimit(0.0f, 12.0f, db);
+    float prev = cutRangeDb.exchange(clamped);
+    if (std::abs(prev - clamped) > 0.1f) staticElementsChanged = true;
 }
 
 void WaveformDisplay::setRange(float rangeDb)
@@ -295,8 +307,9 @@ void WaveformDisplay::clear()
 {
     initializeWaveformImage();
     sampleCounter = 0;
-    currentInputMax = 0.0f;
-    currentOutputMax = 0.0f;
+    currentInputSumSq = 0.0f;
+    currentInputPeak = 0.0f;
+    currentOutputSumSq = 0.0f;
     currentGainSum = 0.0f;
     gainSampleCount = 0;
     gainCurveOpacity = 0.0f;
@@ -328,11 +341,9 @@ void WaveformDisplay::pushSamples(const float* inputSamples, const float* output
         float inAbs = std::abs(inputSamples[i]);
         float outAbs = (outputSamples != nullptr) ? std::abs(outputSamples[i]) : inAbs;
         
-        // Track both min and max for proper waveform display
-        currentInputMin = juce::jmin(currentInputMin, inAbs);
-        currentInputMax = juce::jmax(currentInputMax, inAbs);
-        currentOutputMin = juce::jmin(currentOutputMin, outAbs);
-        currentOutputMax = juce::jmax(currentOutputMax, outAbs);
+        currentInputSumSq += inAbs * inAbs;
+        currentInputPeak = juce::jmax(currentInputPeak, inAbs);
+        currentOutputSumSq += outAbs * outAbs;
         currentGainSum += gainValues[i];
         gainSampleCount++;
 
@@ -352,8 +363,6 @@ void WaveformDisplay::pushSamples(const float* inputSamples, const float* output
         else
         {
             silenceSampleCount++;
-            // Silence detection (~30ms at 44.1kHz) - mark inactive but don't clear queue
-            // The display will continue scrolling via tail frames to gracefully clear
             if (silenceSampleCount > 1323)
             {
                 hasActiveAudio = false;
@@ -364,26 +373,22 @@ void WaveformDisplay::pushSamples(const float* inputSamples, const float* output
         
         if (sampleCounter >= samplesPerEntry)
         {
-            // Create sample data with min/max for proper waveform display
+            float n = static_cast<float>(sampleCounter);
             SampleData data;
-            data.inputMin = currentInputMin;
-            data.inputMax = currentInputMax;
-            data.outputMin = currentOutputMin;
-            data.outputMax = currentOutputMax;
+            data.inputRms = std::sqrt(currentInputSumSq / n);
+            data.inputPeak = currentInputPeak;
+            data.outputRms = std::sqrt(currentOutputSumSq / n);
             data.gainDb = (gainSampleCount > 0) ? 
                 (currentGainSum / static_cast<float>(gainSampleCount)) : 0.0f;
             
             {
                 juce::SpinLock::ScopedLockType lock(pendingLock);
                 pendingData.push_back(data);
-                // Limit queue size to prevent delay buildup (use read index, no O(n) erase)
                 int unread = static_cast<int>(pendingData.size()) - pendingReadIndex;
                 if (unread > 50)
                 {
-                    // Skip old unread data to keep up with real-time
                     pendingReadIndex = static_cast<int>(pendingData.size()) - 50;
                 }
-                // Compact when fully consumed and vector is large
                 if (pendingReadIndex > 0 && pendingReadIndex >= static_cast<int>(pendingData.size()))
                 {
                     pendingData.clear();
@@ -391,12 +396,10 @@ void WaveformDisplay::pushSamples(const float* inputSamples, const float* output
                 }
             }
 
-            // Reset accumulators for next block
             sampleCounter = 0;
-            currentInputMin = 1.0f;   // Reset min high
-            currentInputMax = 0.0f;   // Reset max low
-            currentOutputMin = 1.0f;
-            currentOutputMax = 0.0f;
+            currentInputSumSq = 0.0f;
+            currentInputPeak = 0.0f;
+            currentOutputSumSq = 0.0f;
             currentGainSum = 0.0f;
             gainSampleCount = 0;
         }
@@ -469,58 +472,52 @@ void WaveformDisplay::storeColumnData(int x, const SampleData& data)
     float h = static_cast<float>(imageHeight);
     size_t idx = static_cast<size_t>(x);
     
-    // Store gain value
     if (idx < gainCurveBuffer.size())
     {
         gainCurveBuffer[idx] = data.gainDb;
     }
     
-    // Default: no signal (at bottom)
     float inputTopY = h;
     float inputBottomY = h;
     float outputTopY = h;
     float outputBottomY = h;
     
-    // === INPUT WAVEFORM positions ===
-    if (data.inputMax > 0.0001f)
+    // === INPUT WAVEFORM: RMS as solid body, peak as faint outline ===
+    if (data.inputRms > 0.0001f)
     {
-        inputTopY = linearToLogY(data.inputMax, h);
-        inputBottomY = linearToLogY(data.inputMin + 0.0001f, h);
+        inputTopY = linearToLogY(data.inputRms, h);
         
-        // Smooth the top edge (1-pole low-pass)
+        // Smooth the top edge
         if (x > 0 && idx < inputTopBuffer.size())
         {
             float prevTopY = inputTopBuffer[idx - 1];
             if (prevTopY < h - 2.0f)
             {
-                inputTopY = prevTopY * 0.12f + inputTopY * 0.88f;
+                inputTopY = prevTopY * 0.15f + inputTopY * 0.85f;
             }
         }
         
-        // Ensure minimum thickness
-        inputBottomY = juce::jmax(inputBottomY, inputTopY + 2.0f);
+        // Bottom edge: slightly below RMS for visual thickness
+        inputBottomY = juce::jmax(linearToLogY(data.inputRms * 0.5f, h), inputTopY + 2.0f);
     }
     
-    // === OUTPUT (boost/cut) positions ===
-    if (std::abs(data.gainDb) > 0.3f && data.outputMax > 0.0001f)
+    // === OUTPUT WAVEFORM: RMS of output ===
+    if (std::abs(data.gainDb) > 0.3f && data.outputRms > 0.0001f)
     {
-        outputTopY = linearToLogY(data.outputMax, h);
-        outputBottomY = linearToLogY(data.outputMin + 0.0001f, h);
+        outputTopY = linearToLogY(data.outputRms, h);
         
-        // Smooth the top edge
         if (x > 0 && idx < outputTopBuffer.size())
         {
             float prevOutputY = outputTopBuffer[idx - 1];
             if (prevOutputY < h - 2.0f)
             {
-                outputTopY = prevOutputY * 0.12f + outputTopY * 0.88f;
+                outputTopY = prevOutputY * 0.15f + outputTopY * 0.85f;
             }
         }
         
-        outputBottomY = juce::jmax(outputBottomY, outputTopY + 2.0f);
+        outputBottomY = juce::jmax(linearToLogY(data.outputRms * 0.5f, h), outputTopY + 2.0f);
     }
     
-    // Store all positions
     if (idx < inputTopBuffer.size())
     {
         inputTopBuffer[idx] = inputTopY;
@@ -1001,24 +998,21 @@ void WaveformDisplay::timerCallback()
                 if (hasLastDrawnData)
                 {
                     float t = static_cast<float>(p + 1) / static_cast<float>(pixelsToScroll);
-                    dataToUse.inputMin = lastDrawnData.inputMin + t * (dataToUse.inputMin - lastDrawnData.inputMin);
-                    dataToUse.inputMax = lastDrawnData.inputMax + t * (dataToUse.inputMax - lastDrawnData.inputMax);
-                    dataToUse.outputMin = lastDrawnData.outputMin + t * (dataToUse.outputMin - lastDrawnData.outputMin);
-                    dataToUse.outputMax = lastDrawnData.outputMax + t * (dataToUse.outputMax - lastDrawnData.outputMax);
+                    dataToUse.inputRms = lastDrawnData.inputRms + t * (dataToUse.inputRms - lastDrawnData.inputRms);
+                    dataToUse.inputPeak = lastDrawnData.inputPeak + t * (dataToUse.inputPeak - lastDrawnData.inputPeak);
+                    dataToUse.outputRms = lastDrawnData.outputRms + t * (dataToUse.outputRms - lastDrawnData.outputRms);
                     dataToUse.gainDb = lastDrawnData.gainDb + t * (dataToUse.gainDb - lastDrawnData.gainDb);
                 }
             }
             else if (hasLastDrawnData)
             {
-                // No new data - decay smoothly
                 float decay = 0.92f;
-                dataToUse.inputMin = lastDrawnData.inputMin * decay;
-                dataToUse.inputMax = lastDrawnData.inputMax * decay;
-                dataToUse.outputMin = lastDrawnData.outputMin * decay;
-                dataToUse.outputMax = lastDrawnData.outputMax * decay;
+                dataToUse.inputRms = lastDrawnData.inputRms * decay;
+                dataToUse.inputPeak = lastDrawnData.inputPeak * decay;
+                dataToUse.outputRms = lastDrawnData.outputRms * decay;
                 dataToUse.gainDb = lastDrawnData.gainDb * decay;
-                if (dataToUse.inputMax < 0.0001f) { dataToUse.inputMin = 0.0f; dataToUse.inputMax = 0.0f; }
-                if (dataToUse.outputMax < 0.0001f) { dataToUse.outputMin = 0.0f; dataToUse.outputMax = 0.0f; }
+                if (dataToUse.inputRms < 0.0001f) { dataToUse.inputRms = 0.0f; dataToUse.inputPeak = 0.0f; }
+                if (dataToUse.outputRms < 0.0001f) dataToUse.outputRms = 0.0f;
                 if (std::abs(dataToUse.gainDb) < 0.1f) dataToUse.gainDb = 0.0f;
                 lastDrawnData = dataToUse;
             }
@@ -1223,22 +1217,21 @@ void WaveformDisplay::drawTargetAndRangeLines(juce::Graphics& g)
     float boostY = dbToY(target + boost);
     float cutY = dbToY(target - cut);
     
-    juce::Colour rangeColour(0xFF888899);  // Gray for range lines
+    juce::Colour rangeColour(0xFF888899);
     
-    // Purple gradient colors (like the knobs)
-    juce::Colour targetPurpleDark(0xFF9060D0);   // Purple
-    juce::Colour targetPurpleLight(0xFFD0A0FF);  // Light purple
+    juce::Colour targetPurpleDark(0xFF9060D0);
+    juce::Colour targetPurpleLight(0xFFD0A0FF);
     
-    // End lines slightly before right edge so they don't poke past waveform
     float lineRightEdge = waveformArea.getRight() - 2.0f;
     float lineWidth = lineRightEdge - waveformArea.getX();
     
-    // Range fill (subtle)
+    // Range fill (subtle gray)
     g.setColour(rangeColour.withAlpha(0.04f));
     g.fillRect(waveformArea.getX(), boostY, lineWidth, cutY - boostY);
     
-    // Boost range line - DASHED GRAY
     float dashLengths[] = { 6.0f, 4.0f };
+    
+    // Boost range line - DASHED GRAY
     g.setColour(rangeColour.withAlpha(0.6f));
     g.drawDashedLine(juce::Line<float>(waveformArea.getX(), boostY, lineRightEdge, boostY),
                      dashLengths, 2, 1.0f);

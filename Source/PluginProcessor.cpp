@@ -16,6 +16,8 @@
 const juce::String VocalRiderAudioProcessor::targetLevelParamId = "targetLevel";
 const juce::String VocalRiderAudioProcessor::speedParamId = "speed";
 const juce::String VocalRiderAudioProcessor::rangeParamId = "range";
+const juce::String VocalRiderAudioProcessor::boostRangeParamId = "boostRange";
+const juce::String VocalRiderAudioProcessor::cutRangeParamId = "cutRange";
 const juce::String VocalRiderAudioProcessor::gainOutputParamId = "gainOutput";
 
 // Advanced parameter IDs
@@ -79,6 +81,8 @@ VocalRiderAudioProcessor::VocalRiderAudioProcessor()
     targetLevelParam = apvts.getRawParameterValue(targetLevelParamId);
     speedParam = apvts.getRawParameterValue(speedParamId);
     rangeParam = apvts.getRawParameterValue(rangeParamId);
+    boostRangeParam = apvts.getRawParameterValue(boostRangeParamId);
+    cutRangeParam = apvts.getRawParameterValue(cutRangeParamId);
     gainOutputParamPtr = apvts.getRawParameterValue(gainOutputParamId);
     
     // Advanced parameter pointers
@@ -109,6 +113,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout VocalRiderAudioProcessor::cr
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
+    // Gain Output FIRST: -12 to +12 dB, automatable (for Cubase and other DAWs to record automation)
+    // Placing this first ensures it's the primary/default automation target for hosts like Cubase
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID(gainOutputParamId, 1),
+        "Gain Output",
+        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.01f),
+        0.0f,
+        juce::AudioParameterFloatAttributes().withLabel("dB").withAutomatable(true)
+    ));
+
     // Target Level: -40 to 0 dB, default -22 dB
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID(targetLevelParamId, 1),
@@ -127,7 +141,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout VocalRiderAudioProcessor::cr
         juce::AudioParameterFloatAttributes().withLabel("%")
     ));
 
-    // Range: 0-12 dB, default 6 dB
+    // Range: 0-12 dB, default 6 dB (legacy linked range, kept for backward compat)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID(rangeParamId, 1),
         "Range",
@@ -136,13 +150,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout VocalRiderAudioProcessor::cr
         juce::AudioParameterFloatAttributes().withLabel("dB")
     ));
 
-    // Gain Output: -12 to +12 dB, automatable (for writing automation)
+    // Boost Range: 0-12 dB (max gain boost allowed)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID(gainOutputParamId, 1),
-        "Gain Output",
-        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.01f),
-        0.0f,
-        juce::AudioParameterFloatAttributes().withLabel("dB").withAutomatable(true)
+        juce::ParameterID(boostRangeParamId, 1),
+        "Boost Range",
+        juce::NormalisableRange<float>(0.0f, 12.0f, 0.1f),
+        6.0f,
+        juce::AudioParameterFloatAttributes().withLabel("dB")
+    ));
+
+    // Cut Range: 0-12 dB (max gain cut allowed)
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID(cutRangeParamId, 1),
+        "Cut Range",
+        juce::NormalisableRange<float>(0.0f, 12.0f, 0.1f),
+        6.0f,
+        juce::AudioParameterFloatAttributes().withLabel("dB")
     ));
 
     //==============================================================================
@@ -349,7 +372,9 @@ void VocalRiderAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBl
     gateOpen = false;
     gateSmoothedLevel = -100.0f;
     
-    updateAttackReleaseFromSpeed(speed);
+    // Do NOT call updateAttackReleaseFromSpeed here - let processBlock use the
+    // restored/saved values for attack/release/hold from APVTS. Only update from
+    // speed when the user explicitly changes the speed slider.
     
     // Compute sample-rate-independent parameter smoothing (~3ms time constant)
     paramSmoothingCoeff = std::exp(-1.0f / (0.003f * static_cast<float>(sampleRate)));
@@ -491,25 +516,29 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // Get parameters with smoothing to prevent clicks/pops on rapid changes
     float targetLevelRaw = targetLevelParam->load();
     float speed = speedParam->load();
-    float rangeRaw = rangeParam->load();
+    float boostRangeRaw = boostRangeParam->load();
+    float cutRangeRaw = cutRangeParam->load();
     bool useLookAhead = isLookAheadEnabled();
     
     // Smooth target and range parameters (prevents clicks on rapid UI changes)
     smoothedTargetLevel = smoothedTargetLevel * paramSmoothingCoeff + targetLevelRaw * (1.0f - paramSmoothingCoeff);
-    smoothedRange = smoothedRange * paramSmoothingCoeff + rangeRaw * (1.0f - paramSmoothingCoeff);
+    smoothedBoostRange = smoothedBoostRange * paramSmoothingCoeff + boostRangeRaw * (1.0f - paramSmoothingCoeff);
+    smoothedCutRange = smoothedCutRange * paramSmoothingCoeff + cutRangeRaw * (1.0f - paramSmoothingCoeff);
     float targetLevel = smoothedTargetLevel;
-    float range = smoothedRange;
+    float boostRange = smoothedBoostRange;
+    float cutRange = smoothedCutRange;
 
-    // Update speed-dependent settings
+    // Update speed-dependent RMS window (always keep in sync)
     if (std::abs(speed - lastSpeed) > 0.5f)
     {
         float windowMs = juce::jmap(speed, 0.0f, 100.0f, 100.0f, 10.0f);
         rmsDetector.setWindowSize(windowMs);
-        updateAttackReleaseFromSpeed(speed);
         lastSpeed = speed;
+        // Note: attack/release are NOT overwritten here — they're driven by
+        // the APVTS parameters below, which persist independently of speed.
     }
 
-    // Sync advanced parameters from automation
+    // Sync advanced parameters from APVTS (source of truth for persistence)
     if (attackParam != nullptr) attackMs.store(attackParam->load());
     if (releaseParam != nullptr) releaseMs.store(releaseParam->load());
     if (holdParam != nullptr) holdMs.store(holdParam->load());
@@ -584,18 +613,13 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // Mono read pointer (needed for LUFS, spectral analysis, auto-calibrate, etc.)
     const float* monoRead = monoBuffer.getReadPointer(0);
     
-    // Store original samples for waveform display (pre-allocated)
-    // Use peak-across-channels (max of |L|, |R|) so the waveform aligns with DAW meters,
-    // rather than the mono average which can read ~6dB lower on stereo material.
+    // Store samples for waveform display (mono average for RMS-based display)
     auto& inputSamples = scratchInputSamples;
     auto& gainSamples = scratchGainSamples;
     std::fill(gainSamples.begin(), gainSamples.begin() + numSamples, 0.0f);
     for (int i = 0; i < numSamples; ++i)
     {
-        float peak = 0.0f;
-        for (int ch = 0; ch < numChannels; ++ch)
-            peak = juce::jmax(peak, std::abs(buffer.getSample(ch, i)));
-        inputSamples[static_cast<size_t>(i)] = peak;
+        inputSamples[static_cast<size_t>(i)] = std::abs(monoRead[i]);
     }
 
     // Input metering (before HPF)
@@ -914,7 +938,7 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                         gainNeeded = gainNeeded * (0.5f + 0.5f * ratio * ratio * (gainNeeded > 0 ? 1.0f : -1.0f));
                     }
                     
-                    currentPhraseGainDb = juce::jlimit(-range, range, gainNeeded);
+                    currentPhraseGainDb = juce::jlimit(-cutRange, boostRange, gainNeeded);
                     
                     // === PEAK-AWARE GAIN LIMITING (Natural Mode) ===
                     // Same protection as Standard mode: prevent boost from clipping peaks
@@ -1030,7 +1054,7 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 gainNeeded = gainNeeded * (0.5f + 0.5f * ratio * ratio * (gainNeeded > 0 ? 1.0f : -1.0f));
             }
             
-            targetGainDb = juce::jlimit(-range, range, gainNeeded);
+            targetGainDb = juce::jlimit(-cutRange, boostRange, gainNeeded);
             
             // === PEAK-AWARE GAIN LIMITING ===
             // Prevent boost from pushing peaks past the soft clipper ceiling.
@@ -1231,15 +1255,17 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
     }
 
-    // Output samples for waveform (pre-allocated)
-    // Use peak-across-channels to match input waveform and DAW meters
+    // Output samples for waveform display (mono average for RMS-based display)
     auto& outputSamples = scratchOutputSamples;
-    for (int sample = 0; sample < numSamples; ++sample)
     {
-        float peak = 0.0f;
-        for (int channel = 0; channel < numChannels; ++channel)
-            peak = juce::jmax(peak, std::abs(buffer.getSample(channel, sample)));
-        outputSamples[static_cast<size_t>(sample)] = peak;
+        float invCh = 1.0f / static_cast<float>(numChannels);
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            float sum = 0.0f;
+            for (int channel = 0; channel < numChannels; ++channel)
+                sum += std::abs(buffer.getSample(channel, sample));
+            outputSamples[static_cast<size_t>(sample)] = sum * invCh;
+        }
     }
 
     // Push to waveform display (thread-safe access)
@@ -1251,11 +1277,11 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         display->setTargetLevel(targetLevelRaw);
     }
 
-    // Output metering - use PEAK for display (matches DAW meters)
-    float outputPeak = buffer.getMagnitude(0, 0, numSamples);
+    // Output metering - use RMS to match the gain-riding algorithm's detection
+    float outputRmsLevel = buffer.getRMSLevel(0, 0, numSamples);
     if (totalNumInputChannels > 1)
-        outputPeak = juce::jmax(outputPeak, buffer.getMagnitude(1, 0, numSamples));
-    outputLevelDb.store(juce::Decibels::gainToDecibels(outputPeak, -100.0f));
+        outputRmsLevel = juce::jmax(outputRmsLevel, buffer.getRMSLevel(1, 0, numSamples));
+    outputLevelDb.store(juce::Decibels::gainToDecibels(outputRmsLevel, -100.0f));
 }
 
 //==============================================================================
@@ -1290,6 +1316,9 @@ void VocalRiderAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     state.setProperty("presetIndex", currentPresetIndex.load(), nullptr);
     state.setProperty("windowSizeIndex", windowSizeIndex.load(), nullptr);
     
+    // Range lock state
+    state.setProperty("rangeLocked", rangeLocked.load(), nullptr);
+    
     // Sidechain / vocal focus settings
     state.setProperty("sidechainEnabled", sidechainEnabled.load(), nullptr);
     state.setProperty("sidechainAmount", static_cast<double>(sidechainAmount.load()), nullptr);
@@ -1311,6 +1340,24 @@ void VocalRiderAudioProcessor::setStateInformation(const void* data, int sizeInB
     {
         auto state = juce::ValueTree::fromXml(*xmlState);
         apvts.replaceState(state);
+        
+        // Backward compat: if old state has "range" but not "boostRange"/"cutRange",
+        // copy range to both boost and cut
+        if (!state.getChildWithProperty("id", "boostRange").isValid()
+            && !state.hasProperty("boostRange"))
+        {
+            auto rangeVal = apvts.getRawParameterValue(rangeParamId)->load();
+            if (auto* bp = apvts.getParameter(boostRangeParamId))
+                bp->setValueNotifyingHost(bp->convertTo0to1(rangeVal));
+            if (auto* cp = apvts.getParameter(cutRangeParamId))
+                cp->setValueNotifyingHost(cp->convertTo0to1(rangeVal));
+        }
+        
+        // Range lock state
+        if (state.hasProperty("rangeLocked"))
+            setRangeLocked(static_cast<bool>(state.getProperty("rangeLocked")));
+        else
+            setRangeLocked(true);
         
         // Restore advanced settings
         if (state.hasProperty("lookAheadMode"))
@@ -1528,7 +1575,10 @@ float VocalRiderAudioProcessor::calculateSpectralFlatness(const float* samples, 
     float sumLog = 0.0f;
     int validSamples = 0;
     
-    for (int i = 0; i < numSamples; ++i)
+    // On older hardware, downsample for large blocks to reduce expensive log() calls
+    int step = (numSamples > 256) ? 4 : 1;
+    
+    for (int i = 0; i < numSamples; i += step)
     {
         float absVal = std::abs(samples[i]);
         if (absVal > 1e-10f)
@@ -1654,6 +1704,10 @@ void VocalRiderAudioProcessor::loadPreset(int index)
             param->setValueNotifyingHost(param->convertTo0to1(preset.speed));
         if (auto* param = apvts.getParameter(rangeParamId))
             param->setValueNotifyingHost(param->convertTo0to1(preset.range));
+        if (auto* param = apvts.getParameter(boostRangeParamId))
+            param->setValueNotifyingHost(param->convertTo0to1(preset.range));
+        if (auto* param = apvts.getParameter(cutRangeParamId))
+            param->setValueNotifyingHost(param->convertTo0to1(preset.range));
         
         // Timing parameters (update both APVTS and atomics so processBlock sync doesn't overwrite)
         if (auto* param = apvts.getParameter(attackParamId))
@@ -1700,6 +1754,11 @@ void VocalRiderAudioProcessor::resetToDefaults()
         param->setValueNotifyingHost(param->convertTo0to1(50.0f));   // Default speed
     if (auto* param = apvts.getParameter(rangeParamId))
         param->setValueNotifyingHost(param->convertTo0to1(12.0f));   // Default range
+    if (auto* param = apvts.getParameter(boostRangeParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(12.0f));
+    if (auto* param = apvts.getParameter(cutRangeParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(12.0f));
+    rangeLocked.store(true);
     
     // Reset advanced parameters
     attackMs.store(10.0f);
@@ -1839,6 +1898,10 @@ void VocalRiderAudioProcessor::loadPresetFromData(const Preset& preset)
     if (auto* param = apvts.getParameter(speedParamId))
         param->setValueNotifyingHost(param->convertTo0to1(preset.speed));
     if (auto* param = apvts.getParameter(rangeParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(preset.range));
+    if (auto* param = apvts.getParameter(boostRangeParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(preset.range));
+    if (auto* param = apvts.getParameter(cutRangeParamId))
         param->setValueNotifyingHost(param->convertTo0to1(preset.range));
     
     // Timing parameters (update APVTS so processBlock sync doesn't overwrite)
