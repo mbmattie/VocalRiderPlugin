@@ -175,7 +175,7 @@ void DualRangeKnob::drawDualArcKnob(juce::Graphics& g, juce::Rectangle<float> bo
     bool isHovered = mouseHovering;
 
     auto purpleColour = CustomLookAndFeel::getAccentColour();
-    auto outerPurpleColour = purpleColour.withSaturation(0.35f).brighter(0.25f);  // Lighter, desaturated purple for outer arc
+    auto outerMetallicColour = juce::Colour(0xFF6AAABB);  // Bluish-teal for outer ring
 
     float boostAngle = valueToAngle(boostValue, minDb, maxDb);
     float cutAngle = valueToAngle(cutValue, minDb, maxDb);
@@ -238,7 +238,7 @@ void DualRangeKnob::drawDualArcKnob(juce::Graphics& g, juce::Rectangle<float> bo
     {
         if (hoverRing == DragRing::Boost)
         {
-            g.setColour(outerPurpleColour.withAlpha(0.06f));
+            g.setColour(outerMetallicColour.withAlpha(0.06f));
             g.fillEllipse(centreX - outerRadius, centreY - outerRadius,
                           outerRadius * 2.0f, outerRadius * 2.0f);
         }
@@ -264,10 +264,10 @@ void DualRangeKnob::drawDualArcKnob(juce::Graphics& g, juce::Rectangle<float> bo
                                 0.0f, rotaryStartAngle, boostAngle, true);
 
         juce::ColourGradient arcGrad(
-            outerPurpleColour.darker(0.3f),
+            outerMetallicColour.darker(0.3f),
             centreX + std::sin(rotaryStartAngle) * outerArcRadius,
             centreY - std::cos(rotaryStartAngle) * outerArcRadius,
-            outerPurpleColour.brighter(0.1f),
+            outerMetallicColour.brighter(0.1f),
             centreX + std::sin(boostAngle) * outerArcRadius,
             centreY - std::cos(boostAngle) * outerArcRadius, false);
 
@@ -304,7 +304,7 @@ void DualRangeKnob::drawDualArcKnob(juce::Graphics& g, juce::Rectangle<float> bo
     float outerDotDist = outerArcRadius;
     float odx = centreX + std::sin(boostAngle) * outerDotDist;
     float ody = centreY - std::cos(boostAngle) * outerDotDist;
-    g.setColour(outerPurpleColour);
+    g.setColour(outerMetallicColour);
     g.fillEllipse(odx - dotRadius, ody - dotRadius, dotRadius * 2.0f, dotRadius * 2.0f);
 
     // Inner dot (cut)
@@ -344,6 +344,7 @@ void RangeLockButton::mouseEnter(const juce::MouseEvent& event)
     juce::Component::mouseEnter(event);
     hovering = true;
     repaint();
+    if (onMouseEnterCb) onMouseEnterCb();
 }
 
 void RangeLockButton::mouseExit(const juce::MouseEvent& event)
@@ -351,6 +352,7 @@ void RangeLockButton::mouseExit(const juce::MouseEvent& event)
     juce::Component::mouseExit(event);
     hovering = false;
     repaint();
+    if (onMouseExitCb) onMouseExitCb();
 }
 
 void RangeLockButton::paint(juce::Graphics& g)

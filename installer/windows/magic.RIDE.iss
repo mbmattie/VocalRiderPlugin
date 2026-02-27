@@ -2,7 +2,7 @@
 ; Creates a Windows installer for the plugin
 
 #define MyAppName "magic.RIDE"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.2.0"
 #define MyAppPublisher "MBM Audio"
 #define MyAppURL "https://mbmaudio.com"
 
@@ -20,6 +20,8 @@ OutputBaseFilename={#MyAppName}-{#MyAppVersion}-Windows-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+WizardImageFile=mbm_audio_wizard.bmp
+WizardSmallImageFile=mbm_audio_wizard_small.bmp
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64
 DisableDirPage=yes

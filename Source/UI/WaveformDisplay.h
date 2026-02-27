@@ -100,6 +100,20 @@ public:
     }
     
     //==============================================================================
+    // Zoom button callbacks (for status bar tooltips)
+    void setZoomButtonCallbacks(std::function<void()> onEnter, std::function<void()> onExit)
+    {
+        zoomButton.onMouseEnterCb = std::move(onEnter);
+        zoomButton.onMouseExitCb = std::move(onExit);
+    }
+    bool isZoomEnabled() const { return zoomButton.isOn(); }
+    
+    //==============================================================================
+    // Sidechain display
+    void setSidechainLevel(float db) { sidechainLevelDb.store(db); }
+    void setSidechainActive(bool active) { sidechainActive.store(active); }
+    
+    //==============================================================================
     // I/O Levels
     void setInputLevel(float db) { inputLevelDb.store(db); }
     void setOutputLevel(float db) { outputLevelDb.store(db); }
@@ -239,6 +253,13 @@ private:
     // Range lock (when true, dragging one handle moves both)
     std::atomic<bool> rangeLocked { true };
     
+    // Sidechain display
+    std::atomic<float> sidechainLevelDb { -100.0f };
+    std::atomic<bool> sidechainActive { false };
+    std::vector<float> sidechainTraceBuffer;  // Ring of dB values for trace line
+    void drawSidechainTrace(juce::Graphics& g);
+    void drawSidechainIndicator(juce::Graphics& g);
+    
     // Adaptive display zoom — centers view around the target level
     float displayFloor = -64.0f;       // Current bottom of display (dB)
     float displayCeiling = 6.0f;       // Current top of display (dB)
@@ -247,8 +268,40 @@ private:
     static constexpr float adaptiveMargin = 20.0f;  // dB above/below target to show
     static constexpr float adaptiveFloorMin = -64.0f;
     static constexpr float adaptiveCeilingMax = 6.0f;
-    static constexpr float adaptiveSmoothCoeff = 0.03f;  // Slow smooth (~2s settle)
+    static constexpr float adaptiveSmoothCoeff = 0.08f;   // ~1.5s settle
+    bool adaptiveZoomEnabled = false;  // Default OFF — user toggles on
+    bool adaptiveZoomLocked = false;   // Once settled, stop moving
+    bool adaptiveZoomingOut = false;   // Smooth zoom-out in progress
+    int adaptiveZoomSettleFrames = 0;
+    static constexpr int adaptiveZoomSettleThreshold = 50; // ~1.7s at 30fps
+    float zoomAnchorTarget = -22.0f;   // Frozen target level captured when zoom is enabled
+    float zoomAnchorBoost = 6.0f;      // Frozen boost range at zoom enable
+    float zoomAnchorCut = 6.0f;        // Frozen cut range at zoom enable
     void updateAdaptiveZoom();
+    void resetAdaptiveZoom();
+    
+    // Zoom toggle button (drawn inside the waveform area)
+    class ZoomToggleButton : public juce::Component
+    {
+    public:
+        ZoomToggleButton();
+        void paint(juce::Graphics& g) override;
+        void mouseDown(const juce::MouseEvent& event) override;
+        void mouseEnter(const juce::MouseEvent& event) override;
+        void mouseExit(const juce::MouseEvent& event) override;
+        bool isOn() const { return toggled; }
+        void setToggled(bool on) { toggled = on; repaint(); }
+        std::function<void(bool)> onToggled;
+        std::function<void()> onMouseEnterCb;
+        std::function<void()> onMouseExitCb;
+    private:
+        bool toggled = true;
+        bool hovering = false;
+        std::unique_ptr<juce::Drawable> cachedIcon;
+        juce::Colour cachedIconColour;
+        void ensureIconCached(juce::Colour col);
+    };
+    ZoomToggleButton zoomButton;
     
     // Flag: static elements (target/range/noise floor) changed, force repaint even without audio
     std::atomic<bool> staticElementsChanged { false };  // Also triggers staticOverlayNeedsRedraw

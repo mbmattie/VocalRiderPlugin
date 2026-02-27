@@ -23,7 +23,8 @@
 #include "UI/WaveformDisplay.h"
 
 //==============================================================================
-class VocalRiderAudioProcessor : public juce::AudioProcessor
+class VocalRiderAudioProcessor : public juce::AudioProcessor,
+                                 private juce::Timer
 {
 public:
     //==============================================================================
@@ -136,10 +137,11 @@ public:
     // Sidechain control (reference track matching)
     void setSidechainEnabled(bool enabled) { sidechainEnabled.store(enabled); }
     bool isSidechainEnabled() const { return sidechainEnabled.load(); }
-    void setSidechainAmount(float amount) { sidechainAmount.store(juce::jlimit(0.0f, 100.0f, amount)); }
+    void setSidechainAmount(float amount) { sidechainAmount.store(juce::jlimit(0.0f, 18.0f, amount)); }
     float getSidechainAmount() const { return sidechainAmount.load(); }
     bool hasSidechainInput() const;  // Returns true if sidechain bus is connected
     float getSidechainLevelDb() const { return sidechainLevelDb.load(); }
+    float getEffectiveTargetDb() const { return effectiveTargetDb.load(); }
     
     // Vocal focus filter (frequency-weighted detection)
     void setVocalFocusEnabled(bool enabled) { vocalFocusEnabled.store(enabled); }
@@ -186,7 +188,7 @@ public:
     // Presets
     struct Preset
     {
-        juce::String category;  // Category for grouping presets
+        juce::String category;
         juce::String name;
         float targetLevel;
         float speed;
@@ -200,9 +202,11 @@ public:
         float breathReduction;      // 0-12 dB
         float transientPreservation; // 0-100%
         float noiseFloor;           // -100 = off, -60 to -20 dB
-        // Extended fields for user presets (factory presets use defaults)
         int lookAheadMode = 0;      // 0=Off, 1=10ms, 2=20ms, 3=30ms
         float outputTrim = 0.0f;    // -12 to +12 dB
+        float boostRange = -1.0f;   // -1 = use range for both; >= 0 = independent boost
+        float cutRange = -1.0f;     // -1 = use range for both; >= 0 = independent cut
+        bool rangeLocked = true;    // false = unlock boost/cut independently
     };
     
     static const std::vector<Preset>& getFactoryPresets();
@@ -365,8 +369,9 @@ private:
     //==============================================================================
     // Sidechain (reference track matching)
     std::atomic<bool> sidechainEnabled { false };
-    std::atomic<float> sidechainAmount { 50.0f };  // 0-100% blend with sidechain level
+    std::atomic<float> sidechainAmount { 6.0f };  // Offset in dB: vocal sits this far above sidechain
     std::atomic<float> sidechainLevelDb { -100.0f };  // Current sidechain level for metering
+    std::atomic<float> effectiveTargetDb { -22.0f };  // Dynamic target (moves with sidechain)
     RMSDetector sidechainRmsDetector;
     
     //==============================================================================
@@ -384,6 +389,14 @@ private:
     std::atomic<bool> automationWriteActive { false };
     std::atomic<bool> automationGestureActive { false };
     std::atomic<bool> automationGestureNeedsEnd { false };  // Signal audio thread to end gesture
+    
+    // Message-thread automation relay for VST3/Cubase compatibility.
+    // VST3's beginEdit/performEdit/endEdit only work from the message thread;
+    // the audio-thread path goes through outputParameterChanges which Cubase
+    // treats as display-only. This timer bridges the gap.
+    void timerCallback() override;
+    float lastSentGainOutput = 0.0f;
+    bool messageThreadGestureActive = false;
 
     // Cached parameters
     std::atomic<float>* targetLevelParam = nullptr;

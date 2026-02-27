@@ -34,7 +34,7 @@ APP_PASSWORD="${APP_PASSWORD:-xxxx-xxxx-xxxx-xxxx}"
 # ============================================
 
 PLUGIN_NAME="magic.RIDE"
-VERSION="1.0.0"
+VERSION="1.2.0"
 
 # Check if Release build exists, if not try Debug
 if [ ! -d "${BUILD_DIR}" ]; then

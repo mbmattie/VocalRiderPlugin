@@ -10,11 +10,11 @@ on:
 
 env:
   PLUGIN_NAME: magic.RIDE
-  VERSION: 1.0.0
+  VERSION: 1.2.0
 
 jobs:
   build-macos:
-    runs-on: macos-14  # macOS 14 with older Xcode for compatibility
+    runs-on: macos-14
     
     steps:
     - name: Checkout repository
@@ -25,7 +25,7 @@ jobs:
     - name: Setup Xcode
       uses: maxim-lobanov/setup-xcode@v1
       with:
-        xcode-version: '16.1'  # Compatible with this JUCE version
+        xcode-version: '16.1'
     
     - name: Import Code Signing Certificates
       env:
@@ -34,25 +34,20 @@ jobs:
         P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
         KEYCHAIN_PASSWORD: ${{ github.run_id }}
       run: |
-        # Create variables
         APP_CERTIFICATE_PATH=$RUNNER_TEMP/app_certificate.p12
         INSTALLER_CERTIFICATE_PATH=$RUNNER_TEMP/installer_certificate.p12
         KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
 
-        # Decode certificates
         echo -n "$APP_CERTIFICATE_BASE64" | base64 --decode -o $APP_CERTIFICATE_PATH
         echo -n "$INSTALLER_CERTIFICATE_BASE64" | base64 --decode -o $INSTALLER_CERTIFICATE_PATH
 
-        # Create temporary keychain
         security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
         security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
         security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
 
-        # Import certificates
         security import $APP_CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
         security import $INSTALLER_CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
 
-        # Set keychain as default
         security list-keychain -d user -s $KEYCHAIN_PATH
         security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
     
@@ -62,23 +57,20 @@ jobs:
     - name: Build
       run: cmake --build build --config Release -j$(sysctl -n hw.ncpu)
     
-    - name: Sign Plugins
+    - name: Sign AU & VST3 Plugins
       env:
         TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       run: |
-        # Sign AU plugin
         codesign --deep --force --verify --verbose \
           --sign "Developer ID Application: MATTHEW STEVEN ERNST ($TEAM_ID)" \
           --options runtime \
           build/VocalRider_artefacts/Release/AU/magic.RIDE.component
         
-        # Sign VST3 plugin
         codesign --deep --force --verify --verbose \
           --sign "Developer ID Application: MATTHEW STEVEN ERNST ($TEAM_ID)" \
           --options runtime \
           build/VocalRider_artefacts/Release/VST3/magic.RIDE.vst3
         
-        # Verify signatures
         codesign -dv --verbose=4 build/VocalRider_artefacts/Release/AU/magic.RIDE.component
         codesign -dv --verbose=4 build/VocalRider_artefacts/Release/VST3/magic.RIDE.vst3
     
@@ -92,12 +84,10 @@ jobs:
       env:
         TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       run: |
-        # Sign the installer package
         productsign --sign "Developer ID Installer: MATTHEW STEVEN ERNST ($TEAM_ID)" \
           installer/output/magic.RIDE-${{ env.VERSION }}-Installer.pkg \
           installer/output/magic.RIDE-${{ env.VERSION }}-Installer-signed.pkg
         
-        # Replace unsigned with signed
         mv installer/output/magic.RIDE-${{ env.VERSION }}-Installer-signed.pkg \
            installer/output/magic.RIDE-${{ env.VERSION }}-Installer.pkg
     
@@ -107,17 +97,13 @@ jobs:
         APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       run: |
-        # Submit for notarization
         xcrun notarytool submit installer/output/magic.RIDE-${{ env.VERSION }}-Installer.pkg \
           --apple-id "$APPLE_ID" \
           --team-id "$TEAM_ID" \
           --password "$APPLE_APP_PASSWORD" \
           --wait
         
-        # Staple the notarization ticket
         xcrun stapler staple installer/output/magic.RIDE-${{ env.VERSION }}-Installer.pkg
-        
-        # Verify
         xcrun stapler validate installer/output/magic.RIDE-${{ env.VERSION }}-Installer.pkg
     
     - name: Upload macOS Installer (Signed & Notarized)
@@ -137,6 +123,12 @@ jobs:
       with:
         name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-macOS-VST3
         path: build/VocalRider_artefacts/Release/VST3/*.vst3
+    
+    - name: Upload macOS AAX (Unsigned - sign locally with iLok)
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-macOS-AAX-unsigned
+        path: build/VocalRider_artefacts/Release/AAX/*.aaxplugin
     
     - name: Cleanup Keychain
       if: always()
@@ -163,6 +155,120 @@ jobs:
         echo "Checking build output..."
         dir build\VocalRider_artefacts\Release\VST3\ /s
       shell: cmd
+    
+    - name: Install iLok License Manager (Windows)
+      run: |
+        $zipUrl = "https://installers.ilok.com/iloklicensemanager/LicenseSupportInstallerWin.zip"
+        $zipPath = "$env:RUNNER_TEMP\LicenseSupportInstallerWin.zip"
+        $extractPath = "$env:RUNNER_TEMP\ilok"
+        
+        Write-Host "Downloading iLok License Manager..."
+        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
+        Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+        
+        $installer = Get-ChildItem -Path $extractPath -Filter "*.exe" -Recurse | Select-Object -First 1
+        if ($installer) {
+          Write-Host "Installing iLok License Manager: $($installer.FullName)"
+          Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait -NoNewWindow
+          Write-Host "iLok License Manager installed."
+        } else {
+          Write-Host "WARNING: iLok installer not found in zip."
+        }
+      shell: pwsh
+      continue-on-error: true
+    
+    - name: Download Eden SDK
+      env:
+        GH_TOKEN: ${{ secrets.BUILD_TOOLS_TOKEN }}
+      run: |
+        gh release download eden-sdk-v5.10.4 `
+          --repo mbmattie/build-tools `
+          --pattern "*.exe" `
+          --dir $env:RUNNER_TEMP\eden
+      shell: pwsh
+      continue-on-error: true
+    
+    - name: Install Eden SDK
+      run: |
+        $installer = Get-ChildItem -Path "$env:RUNNER_TEMP\eden" -Filter "*.exe" | Select-Object -First 1
+        if ($installer) {
+          Write-Host "Installing Eden SDK: $($installer.FullName)"
+          Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait -NoNewWindow
+          Write-Host "Eden SDK installed."
+        } else {
+          Write-Host "Eden SDK installer not found. AAX signing will be skipped."
+        }
+      shell: pwsh
+      continue-on-error: true
+    
+    - name: Sign Windows AAX (PACE Cloud Signing)
+      env:
+        ILOK_USERNAME: ${{ secrets.ILOK_USERNAME }}
+        ILOK_PASSWORD: ${{ secrets.ILOK_PASSWORD }}
+        PACE_CUSTOMER_NUMBER: ${{ secrets.PACE_CUSTOMER_NUMBER }}
+      run: |
+        $AAX_IN = "build\VocalRider_artefacts\Release\AAX\magic.RIDE.aaxplugin"
+        
+        if (-not $env:ILOK_USERNAME -or -not $env:ILOK_PASSWORD) {
+          Write-Host "iLok credentials not configured. Skipping AAX signing."
+          exit 0
+        }
+        
+        if (-not (Test-Path $AAX_IN)) {
+          Write-Host "AAX plugin not found. Skipping AAX signing."
+          exit 0
+        }
+        
+        # Find wraptool and iloktool
+        $wraptool = Get-ChildItem -Path "C:\Program Files" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        $iloktool = Get-ChildItem -Path "C:\Program Files" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        
+        if (-not $wraptool) {
+          Write-Host "wraptool not found. Skipping AAX signing."
+          exit 0
+        }
+        
+        Write-Host "Found wraptool: $($wraptool.FullName)"
+        
+        # Open iLok cloud session
+        if ($iloktool) {
+          Write-Host "Opening iLok cloud session..."
+          & $iloktool.FullName cloud --open --account $env:ILOK_USERNAME --password $env:ILOK_PASSWORD -v
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "WARNING: Failed to open iLok cloud session. Skipping AAX signing."
+            exit 0
+          }
+        }
+        
+        # Sign the AAX plugin
+        Write-Host "Signing AAX plugin..."
+        & $wraptool.FullName sign --verbose `
+          --account $env:ILOK_USERNAME `
+          --customernumber $env:PACE_CUSTOMER_NUMBER `
+          --customername "MBM Audio" `
+          --productname "magic.RIDE" `
+          --allowsigningservice `
+          --dsig1-compat off `
+          --in $AAX_IN `
+          --out "${AAX_IN}_signed"
+        
+        if ($LASTEXITCODE -eq 0) {
+          Remove-Item -Recurse -Force $AAX_IN
+          Rename-Item "${AAX_IN}_signed" $AAX_IN
+          Write-Host "AAX plugin signed successfully!"
+          
+          & $wraptool.FullName verify --verbose --in $AAX_IN
+        } else {
+          Write-Host "WARNING: AAX signing failed."
+        }
+        
+        # Close iLok cloud session
+        if ($iloktool) {
+          Write-Host "Closing iLok cloud session..."
+          & $iloktool.FullName cloud --close -v
+        }
+      shell: pwsh
+      continue-on-error: true
     
     - name: Create installer output directory
       run: mkdir -p installer\output
@@ -191,7 +297,6 @@ jobs:
         name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-Windows-Standalone
         path: build/VocalRider_artefacts/Release/Standalone/*.exe
 
-  # Create a release with all artifacts when a tag is pushed
   release:
     needs: [build-macos, build-windows]
     runs-on: ubuntu-latest

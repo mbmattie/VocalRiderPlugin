@@ -96,6 +96,8 @@ public:
     bool isLocked() const { return locked; }
 
     std::function<void(bool)> onLockChanged;
+    std::function<void()> onMouseEnterCb;
+    std::function<void()> onMouseExitCb;
 
 private:
     void drawSvgLockIcon(juce::Graphics& g, juce::Rectangle<float> bounds, bool isLocked);

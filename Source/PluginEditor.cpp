@@ -207,6 +207,16 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     
     waveformDisplay.setRangeLocked(audioProcessor.isRangeLocked());
     
+    waveformDisplay.setZoomButtonCallbacks(
+        [this]() {
+            setStatusBarText(waveformDisplay.isZoomEnabled()
+                ? "Adaptive zoom is on \u2014 click to show full range"
+                : "Click to zoom into the active signal range");
+        },
+        [this]() {
+            clearStatusBarText();
+        }
+    );
 
     //==============================================================================
     // Control Panel (floating tab)
@@ -320,6 +330,16 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
         waveformDisplay.setRangeLocked(isLocked);
         updateRangeLabel();
         saveStateForUndo();
+    };
+    rangeLockButton.onMouseEnterCb = [this]() {
+        currentHoveredComponent = &rangeLockButton;
+        setStatusBarText(rangeLockButton.isLocked()
+            ? "Unlock to set boost and cut range independently"
+            : "Lock to move boost and cut range together");
+    };
+    rangeLockButton.onMouseExitCb = [this]() {
+        if (currentHoveredComponent == &rangeLockButton) currentHoveredComponent = nullptr;
+        clearStatusBarText();
     };
 
     rangeLabel.setText("RANGE", juce::dontSendNotification);
@@ -772,6 +792,26 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     setupTrimRangeLabel(trimMinLabel, "-12");
     setupTrimRangeLabel(trimMidLabel, "0");
     setupTrimRangeLabel(trimMaxLabel, "+12");
+    
+    // Sidechain UI (infrastructure kept, hidden for now — future update)
+    sidechainToggle.setColour(juce::ToggleButton::textColourId, CustomLookAndFeel::getTextColour());
+    sidechainToggle.setColour(juce::ToggleButton::tickColourId, CustomLookAndFeel::getAccentColour());
+    sidechainToggle.setToggleState(audioProcessor.isSidechainEnabled(), juce::dontSendNotification);
+    sidechainToggle.onClick = [this] {
+        bool on = sidechainToggle.getToggleState();
+        audioProcessor.setSidechainEnabled(on);
+        waveformDisplay.setSidechainActive(on);
+    };
+    addChildComponent(sidechainToggle);
+    
+    setupAdvSlider(sidechainOffsetSlider, 0.0, 18.0, "dB");
+    sidechainOffsetSlider.setValue(audioProcessor.getSidechainAmount(), juce::dontSendNotification);
+    sidechainOffsetSlider.onValueChange = [this] {
+        audioProcessor.setSidechainAmount(static_cast<float>(sidechainOffsetSlider.getValue()));
+    };
+    addChildComponent(sidechainOffsetSlider);
+    setupAdvLabel(sidechainOffsetLabel, "SC OFFSET");
+    sidechainOffsetLabel.setVisible(false);
 
     // Restore window size from saved state (default to Medium)
     int savedSizeIndex = audioProcessor.getWindowSizeIndex();
@@ -1029,6 +1069,19 @@ void VocalRiderAudioProcessorEditor::updateAdvancedControls()
     transientPreservationSlider.setValue(audioProcessor.getTransientPreservation() * 100.0f, juce::dontSendNotification);
     outputTrimMeter.setValue(audioProcessor.getOutputTrim());
     noiseFloorSlider.setValue(audioProcessor.getNoiseFloor(), juce::dontSendNotification);
+    // Sidechain UI hidden for now — force disabled to prevent stale state
+    audioProcessor.setSidechainEnabled(false);
+    waveformDisplay.setSidechainActive(false);
+    sidechainToggle.setToggleState(false, juce::dontSendNotification);
+    sidechainOffsetSlider.setValue(audioProcessor.getSidechainAmount(), juce::dontSendNotification);
+    
+    // Sync range lock state and dual range knob from processor
+    bool locked = audioProcessor.isRangeLocked();
+    rangeLockButton.setLocked(locked);
+    dualRangeKnob.setLocked(locked);
+    waveformDisplay.setRangeLocked(locked);
+    dualRangeKnob.setBoostValue(static_cast<float>(boostRangeSlider.getValue()));
+    dualRangeKnob.setCutValue(static_cast<float>(cutRangeSlider.getValue()));
     
     // Bottom bar UI state
     silenceToggle.setToggleState(audioProcessor.isSmartSilenceEnabled(), juce::dontSendNotification);
@@ -1435,10 +1488,10 @@ void VocalRiderAudioProcessorEditor::resized()
         
         advContent.removeFromTop(6);
         
-        // LEFT SIDE: 6 Knobs with labels below
-        int advKnobSize = 42;  // Slightly smaller to fit 6 knobs
+        // LEFT SIDE: 7 Knobs with labels below
+        int advKnobSize = 40;
         int labelHeight = 12;
-        int labelWidth = 70;
+        int labelWidth = 65;
         int numKnobs = 6;  // Attack, Release, Hold, Breath, Transient, Noise Floor
         
         // Reserve space for output trim fader on right
@@ -1473,6 +1526,11 @@ void VocalRiderAudioProcessorEditor::resized()
         
         noiseFloorSlider.setBounds(x, y, advKnobSize, advKnobSize);
         noiseFloorLabel.setBounds(x - (labelWidth - advKnobSize) / 2, y + advKnobSize + 2, labelWidth, labelHeight);
+        
+        // Sidechain UI hidden for now (infrastructure kept for future update)
+        sidechainToggle.setBounds(-100, -100, 1, 1);
+        sidechainOffsetSlider.setBounds(-100, -100, 1, 1);
+        sidechainOffsetLabel.setBounds(-100, -100, 1, 1);
         
         // RIGHT SIDE: Output Trim Vertical Fader (spans FULL advanced panel height)
         // Use advArea bounds directly so the fader isn't limited by the knob row
@@ -1535,18 +1593,19 @@ void VocalRiderAudioProcessorEditor::resized()
     // Dual range knob (visible) — same size as speed knob for symmetry
     dualRangeKnob.setBounds(rangeX, knobY + 8, smallKnobSize, smallKnobSize);
     
-    // RANGE label + lock icon centered under knob, vertically aligned at midpoints
-    int lockSize = 13;
+    // RANGE label + lock icon centered under knob
+    // Match SPEED label padding: label top = knobBottom + 2
+    int lockSize = 11;
     int labelTextW = 38;
     int totalLabelW = labelTextW + lockSize + 3;
     int labelGroupX = rangeX + (smallKnobSize - totalLabelW) / 2;
-    int labelTopY = knobY + 8 + smallKnobSize + 2;
+    int rangeLabelY = knobY + 8 + smallKnobSize + 2;
+    rangeLabel.setBounds(labelGroupX, rangeLabelY, labelTextW, labelHeight);
+    // Lock icon vertically centered with RANGE text
+    int labelMidY = rangeLabelY + labelHeight / 2 + 1;
     rangeLockButton.setBounds(labelGroupX + labelTextW + 3,
-                              labelTopY + (labelHeight - lockSize) / 2,
+                              labelMidY - lockSize / 2 - 3,
                               lockSize, lockSize);
-    // Align RANGE text midpoint with lock icon midpoint
-    int lockMidY = labelTopY + (labelHeight - lockSize) / 2 + lockSize / 2;
-    rangeLabel.setBounds(labelGroupX, lockMidY - labelHeight / 2, labelTextW, labelHeight);
     
     
     // Speed to the right - LABEL BELOW knob
@@ -1606,6 +1665,8 @@ void VocalRiderAudioProcessorEditor::timerCallback()
     
     waveformDisplay.setInputLevel(audioProcessor.getInputLevelDb());
     waveformDisplay.setOutputLevel(audioProcessor.getOutputLevelDb());
+    waveformDisplay.setSidechainLevel(audioProcessor.getSidechainLevelDb());
+    waveformDisplay.setSidechainActive(audioProcessor.isSidechainEnabled());
     
     // Natural Mode indicator: label visible when toggle is ON,
     // green dot reflects actual phrase detection from audio thread

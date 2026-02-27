@@ -1976,6 +1976,10 @@ private:
     juce::ComboBox lookAheadComboBox;
     juce::ComboBox detectionModeComboBox;
     
+    // Sidechain controls in advanced panel
+    juce::ToggleButton sidechainToggle { "Sidechain" };
+    TooltipSlider sidechainOffsetSlider;
+    juce::Label sidechainOffsetLabel;
     
     TooltipSlider attackSlider;
     TooltipSlider releaseSlider;

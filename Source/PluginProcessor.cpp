@@ -36,6 +36,7 @@ const juce::String VocalRiderAudioProcessor::noiseFloorParamId = "noiseFloor";
 const std::vector<VocalRiderAudioProcessor::Preset>& VocalRiderAudioProcessor::getFactoryPresets()
 {
     // Category, Name, Target, Speed, Range, Attack, Release, Hold, Natural, SmartSilence, LUFS, Breath, Transient, NoiseFloor
+    // Extended: lookAheadMode, outputTrim, boostRange (-1=same as range), cutRange (-1=same), rangeLocked
     static const std::vector<Preset> presets = {
         // Vocals - for singing and music production
         { "Vocals",    "Gentle Lead",      -18.0f, 30.0f,  6.0f, 100.0f, 400.0f,  50.0f, true,  false, false, 0.0f,  0.0f, -100.0f },
@@ -44,6 +45,8 @@ const std::vector<VocalRiderAudioProcessor::Preset>& VocalRiderAudioProcessor::g
         { "Vocals",    "Backing Vocals",   -22.0f, 35.0f,  5.0f,  80.0f, 350.0f,  60.0f, true,  false, false, 3.0f,  0.0f, -45.0f },
         { "Vocals",    "Breathy Vocal",    -19.0f, 40.0f,  7.0f,  70.0f, 300.0f,  80.0f, true,  true,  false, 6.0f,  0.0f, -42.0f },
         { "Vocals",    "Aggressive Mix",   -14.0f, 75.0f, 12.0f,  15.0f,  60.0f,  10.0f, false, false, false, 0.0f, 50.0f, -100.0f },
+        { "Vocals",    "Boost Only",       -20.0f, 50.0f,  8.0f,  50.0f, 200.0f,  40.0f, true,  false, false, 0.0f,  0.0f, -100.0f, 0, 0.0f, 10.0f, 2.0f, false },
+        { "Vocals",    "Cut Only",         -16.0f, 50.0f,  8.0f,  40.0f, 180.0f,  30.0f, false, false, false, 0.0f, 20.0f, -100.0f, 0, 0.0f, 2.0f, 10.0f, false },
         
         // Speaking/Dialogue - for podcasts, voiceovers, etc.
         { "Speaking",  "Podcast",          -18.0f, 50.0f,  9.0f,  50.0f, 200.0f,  30.0f, false, true,  true,  4.0f,  0.0f, -48.0f },
@@ -52,6 +55,7 @@ const std::vector<VocalRiderAudioProcessor::Preset>& VocalRiderAudioProcessor::g
         { "Speaking",  "Voiceover",        -17.0f, 55.0f,  8.0f,  45.0f, 180.0f,  40.0f, false, true,  true,  4.0f,  0.0f, -46.0f },
         { "Speaking",  "Interview",        -19.0f, 45.0f,  7.0f,  60.0f, 250.0f,  50.0f, true,  true,  false, 6.0f,  0.0f, -44.0f },
         { "Speaking",  "Audiobook",        -21.0f, 35.0f,  6.0f,  90.0f, 400.0f,  80.0f, true,  true,  true,  5.0f,  0.0f, -50.0f },
+        { "Speaking",  "Lift Whispers",    -22.0f, 45.0f,  8.0f,  70.0f, 280.0f,  60.0f, true,  true,  true,  4.0f,  0.0f, -46.0f, 0, 0.0f, 12.0f, 3.0f, false },
         
         // Mattie's Favorites - curated collection (natural + LUFS focused)
         { "Mattie's Favorites", "Natural LUFS",     -18.0f, 60.0f,  7.0f,  40.0f, 180.0f,  35.0f, true,  false, true,  0.0f,  0.0f, -100.0f },
@@ -60,6 +64,8 @@ const std::vector<VocalRiderAudioProcessor::Preset>& VocalRiderAudioProcessor::g
         { "Mattie's Favorites", "Clean Podcast",    -16.0f, 55.0f,  9.0f,  35.0f, 160.0f,  30.0f, true,  true,  true,  5.0f,  0.0f, -48.0f },
         { "Mattie's Favorites", "Transparent",      -19.0f, 40.0f,  5.0f,  70.0f, 300.0f,  50.0f, true,  false, true,  0.0f,  0.0f, -100.0f },
         { "Mattie's Favorites", "Punchy Vocal",     -16.0f, 65.0f, 10.0f,  30.0f, 140.0f,  25.0f, true,  false, false, 0.0f, 40.0f, -100.0f },
+        { "Mattie's Favorites", "Gentle Lift",      -19.0f, 40.0f,  6.0f,  60.0f, 260.0f,  45.0f, true,  false, true,  0.0f, 10.0f, -100.0f, 0, 0.0f, 8.0f, 3.0f, false },
+        { "Mattie's Favorites", "Tame Peaks",       -17.0f, 55.0f,  8.0f,  35.0f, 150.0f,  25.0f, true,  false, true,  0.0f, 30.0f, -100.0f, 0, 0.0f, 3.0f, 10.0f, false },
     };
     return presets;
 }
@@ -99,13 +105,69 @@ VocalRiderAudioProcessor::VocalRiderAudioProcessor()
     #if JucePlugin_Build_Standalone
     formatManager.registerBasicFormats();
     #endif
+    
+    startTimerHz(30);
 }
 
 VocalRiderAudioProcessor::~VocalRiderAudioProcessor()
 {
+    stopTimer();
+    
     #if JucePlugin_Build_Standalone
     transportSource.setSource(nullptr);
     #endif
+}
+
+//==============================================================================
+void VocalRiderAudioProcessor::timerCallback()
+{
+    // Relay gain output to host from the message thread.
+    // In VST3, beginEdit/performEdit/endEdit only work from the message thread.
+    // The audio thread path (outputParameterChanges) is treated as display-only
+    // by Cubase, so we must also push values here for automation recording.
+    //
+    // In Read mode the DAW drives the parameter — do NOT write back.
+    if (automationMode.load() == AutomationMode::Read)
+    {
+        if (messageThreadGestureActive)
+        {
+            if (auto* param = apvts.getParameter(gainOutputParamId))
+                param->endChangeGesture();
+            messageThreadGestureActive = false;
+        }
+        return;
+    }
+    
+    float currentGain = gainOutputParam.load();
+    bool gainIsActive = std::abs(currentGain) > 0.05f;
+    
+    if (auto* param = apvts.getParameter(gainOutputParamId))
+    {
+        bool valueChanged = std::abs(currentGain - lastSentGainOutput) > 0.005f;
+        
+        if (gainIsActive || messageThreadGestureActive)
+        {
+            if (!messageThreadGestureActive)
+            {
+                param->beginChangeGesture();
+                messageThreadGestureActive = true;
+            }
+            
+            if (valueChanged)
+            {
+                param->setValueNotifyingHost(param->convertTo0to1(currentGain));
+                lastSentGainOutput = currentGain;
+            }
+            
+            if (!gainIsActive)
+            {
+                param->setValueNotifyingHost(param->convertTo0to1(0.0f));
+                lastSentGainOutput = 0.0f;
+                param->endChangeGesture();
+                messageThreadGestureActive = false;
+            }
+        }
+    }
 }
 
 //==============================================================================
@@ -114,7 +176,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout VocalRiderAudioProcessor::cr
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
     // Gain Output FIRST: -12 to +12 dB, automatable (for Cubase and other DAWs to record automation)
-    // Placing this first ensures it's the primary/default automation target for hosts like Cubase
+    // Placing this first ensures it's the primary/default automation target for hosts like Cubase.
+    // Marked as non-automatable from the user side so hosts like Cubase treat it as output-only;
+    // the plugin drives this value via setValueNotifyingHost on every block.
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID(gainOutputParamId, 1),
         "Gain Output",
@@ -123,11 +187,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout VocalRiderAudioProcessor::cr
         juce::AudioParameterFloatAttributes().withLabel("dB").withAutomatable(true)
     ));
 
-    // Target Level: -40 to 0 dB, default -22 dB
+    // Target Level: -50 to 0 dB, default -22 dB
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID(targetLevelParamId, 1),
         "Target Level",
-        juce::NormalisableRange<float>(-40.0f, 0.0f, 0.1f),
+        juce::NormalisableRange<float>(-50.0f, 0.0f, 0.1f),
         -22.0f,
         juce::AudioParameterFloatAttributes().withLabel("dB")
     ));
@@ -564,10 +628,11 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     if (naturalModeEnabled.load())
     {
         float maxSample = 0.0f;
-        const int mainInputChannels = juce::jmin(totalNumInputChannels, 2);  // Exclude sidechain
+        auto mainBusSilence = getBusBuffer(buffer, true, 0);
+        const int mainInputChannels = mainBusSilence.getNumChannels();
         for (int ch = 0; ch < mainInputChannels; ++ch)
         {
-            auto* channelData = buffer.getReadPointer(ch);
+            auto* channelData = mainBusSilence.getReadPointer(ch);
             for (int i = 0; i < numSamples; ++i)
                 maxSample = juce::jmax(maxSample, std::abs(channelData[i]));
         }
@@ -599,14 +664,15 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     if (numSamples <= 0 || totalNumInputChannels <= 0)
         return;
 
-    // Create mono sum for level detection (using pre-allocated buffer to avoid heap allocs)
+    // Create mono sum for level detection from main input bus only (not sidechain)
     auto& monoBuffer = scratchMonoBuffer;
     monoBuffer.clear();
     
-    const int numChannels = juce::jmax(1, juce::jmin(totalNumInputChannels, 2));
+    auto mainBusBuffer = getBusBuffer(buffer, true, 0);
+    const int numChannels = juce::jmax(1, mainBusBuffer.getNumChannels());
     for (int channel = 0; channel < numChannels; ++channel)
     {
-        monoBuffer.addFrom(0, 0, buffer, channel, 0, numSamples,
+        monoBuffer.addFrom(0, 0, mainBusBuffer, channel, 0, numSamples,
                            1.0f / static_cast<float>(numChannels));
     }
 
@@ -629,26 +695,32 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     // === SIDECHAIN INPUT PROCESSING ===
     bool useSidechain = sidechainEnabled.load() && hasSidechainInput();
-    float sidechainBlend = sidechainAmount.load() / 100.0f;
     float sidechainLevel = -100.0f;
     
     if (useSidechain)
     {
-        // Get sidechain input (channels 2+ are sidechain, pre-allocated)
-        auto& sidechainBuffer = scratchSidechainBuffer;
-        sidechainBuffer.clear();
+        auto scBusBuffer = getBusBuffer(buffer, true, 1);
+        int scChannels = scBusBuffer.getNumChannels();
         
-        int numSidechainChannels = getTotalNumInputChannels() - 2;
-        for (int ch = 0; ch < numSidechainChannels && ch < 2; ++ch)
+        if (scChannels > 0)
         {
-            sidechainBuffer.addFrom(0, 0, buffer, ch + 2, 0, numSamples, 
-                                    1.0f / static_cast<float>(juce::jmin(numSidechainChannels, 2)));
+            auto& sidechainBuffer = scratchSidechainBuffer;
+            sidechainBuffer.clear();
+            
+            float scInvCh = 1.0f / static_cast<float>(juce::jmin(scChannels, 2));
+            for (int ch = 0; ch < scChannels && ch < 2; ++ch)
+            {
+                sidechainBuffer.addFrom(0, 0, scBusBuffer, ch, 0, numSamples, scInvCh);
+            }
+            
+            float scRms = sidechainBuffer.getRMSLevel(0, 0, numSamples);
+            sidechainLevel = juce::Decibels::gainToDecibels(scRms, -100.0f);
+            sidechainLevelDb.store(sidechainLevel);
         }
-        
-        // Measure sidechain level
-        float scRms = sidechainBuffer.getRMSLevel(0, 0, numSamples);
-        sidechainLevel = juce::Decibels::gainToDecibels(scRms, -100.0f);
-        sidechainLevelDb.store(sidechainLevel);
+    }
+    else
+    {
+        sidechainLevelDb.store(-100.0f);
     }
 
     // === VOCAL FOCUS FILTER (frequency-weighted detection) ===
@@ -743,7 +815,7 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         {
             float avgRms = std::sqrt(autoCalibrateAccumulator / static_cast<float>(autoCalibrateSampleCount));
             float suggestedTarget = juce::Decibels::gainToDecibels(avgRms, -60.0f);
-            suggestedTarget = juce::jlimit(-40.0f, -6.0f, suggestedTarget);
+            suggestedTarget = juce::jlimit(-50.0f, -6.0f, suggestedTarget);
             
             if (auto* param = apvts.getParameter(targetLevelParamId))
             {
@@ -802,14 +874,15 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const float gateSmoothRelease = 0.9995f;
     
     // === SIDECHAIN TARGET ADJUSTMENT ===
-    // When sidechain is enabled, blend the fixed target with matching the sidechain level
+    // When sidechain is enabled, dynamic target = sidechain RMS + offset
     float effectiveTarget = targetLevel;
     if (useSidechain && sidechainLevel > -60.0f)
     {
-        // Sidechain level becomes the dynamic target
-        // Blend between fixed target (0%) and sidechain-following (100%)
-        effectiveTarget = targetLevel * (1.0f - sidechainBlend) + sidechainLevel * sidechainBlend;
+        float offsetDb = sidechainAmount.load();
+        effectiveTarget = sidechainLevel + offsetDb;
+        effectiveTarget = juce::jlimit(-50.0f, 0.0f, effectiveTarget);
     }
+    effectiveTargetDb.store(effectiveTarget);
     targetLevel = effectiveTarget;
     
     // Check if Natural (phrase-based) mode is enabled
@@ -1109,21 +1182,15 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             int bufferSize = lookAheadDelayBuffer.getNumSamples();
             int readPos = (lookAheadWritePos - currentLookAheadSamples + bufferSize) % bufferSize;
             
-            for (int channel = 0; channel < juce::jmin(totalNumInputChannels, 2); ++channel)
+            for (int channel = 0; channel < numChannels; ++channel)
             {
                 float* channelData = buffer.getWritePointer(channel);
                 float* delayData = lookAheadDelayBuffer.getWritePointer(channel);
                 
-                // Write current sample to delay buffer
                 delayData[lookAheadWritePos] = channelData[sample];
                 
-                // Read delayed sample
                 float delayedSample = lookAheadBufferFilled ? delayData[readPos] : 0.0f;
                 
-                // Apply CURRENT gain (from "future" audio analysis) to the DELAYED audio.
-                // This is the key insight of proper look-ahead: the gain was computed from
-                // audio that hasn't been output yet, so the rider can start adjusting
-                // before a loud transient or quiet passage actually hits the output.
                 float gain = precomputedGains[static_cast<size_t>(sample)];
                 
                 float processed = delayedSample * gain;
@@ -1144,12 +1211,11 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         {
             float gainLinear = precomputedGains[static_cast<size_t>(sample)];
             
-            for (int channel = 0; channel < juce::jmin(totalNumInputChannels, 2); ++channel)
+            for (int channel = 0; channel < numChannels; ++channel)
             {
                 float* channelData = buffer.getWritePointer(channel);
                 float inputSample = channelData[sample];
                 
-                // Apply the precomputed gain (transient preservation already applied during calculation)
                 float processed = inputSample * gainLinear;
                 channelData[sample] = softClip(processed);
             }
@@ -1171,83 +1237,81 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
     }
     
-    // Update the gain output parameter for DAW automation
+    // Update the gain output parameter for DAW automation.
+    // In Read mode the DAW drives the parameter value — do NOT write back.
     gainOutputParam.store(finalGainDb);
     
-    // Only write automation in Touch/Latch/Write modes (not Off or Read)
-    bool shouldWriteAutomation = (autoMode == AutomationMode::Touch || 
-                                   autoMode == AutomationMode::Latch || 
-                                   autoMode == AutomationMode::Write);
-    
-    if (shouldWriteAutomation)
+    if (autoMode != AutomationMode::Read)
     {
-        // Write the computed gain to the automatable parameter
         if (auto* param = apvts.getParameter(gainOutputParamId))
         {
             float normalizedGain = param->convertTo0to1(finalGainDb);
-            bool shouldWrite = false;
+            bool gainIsActive = std::abs(finalGainDb) > 0.05f;
+            
+            // Cubase (VST3) requires beginChangeGesture/endChangeGesture pairs to
+            // record automation. We bracket value changes with gestures so that all
+            // hosts (Cubase, Pro Tools, Logic) can record the output parameter via
+            // their own track automation modes.
+            bool shouldWriteGesture = false;
             
             switch (autoMode)
             {
                 case AutomationMode::Write:
-                    // Continuous write - ALWAYS output, no threshold
-                    shouldWrite = true;
+                    shouldWriteGesture = true;
                     break;
                     
                 case AutomationMode::Latch:
-                    // Write once any gain change occurs, then continue
-                    if (automationWriteActive || std::abs(finalGainDb) > 0.05f)
+                    if (automationWriteActive || gainIsActive)
                     {
-                        shouldWrite = true;
+                        shouldWriteGesture = true;
                         automationWriteActive = true;
                     }
                     break;
                     
                 case AutomationMode::Touch:
-                    // Write when there's any meaningful gain change
-                    shouldWrite = (std::abs(finalGainDb) > 0.05f);
+                    shouldWriteGesture = gainIsActive;
                     break;
                     
                 case AutomationMode::Off:
-                case AutomationMode::Read:
+                    shouldWriteGesture = gainIsActive;
+                    break;
+                    
+                default:
                     break;
             }
             
-            if (shouldWrite)
+            if (shouldWriteGesture)
             {
-                // Signal gesture start if not already writing
                 if (!automationGestureActive)
                 {
                     param->beginChangeGesture();
                     automationGestureActive = true;
                 }
-                param->setValueNotifyingHost(normalizedGain);
             }
-            else if (automationGestureActive && autoMode == AutomationMode::Touch)
+            else if (automationGestureActive)
             {
-                // End gesture when Touch mode stops writing
                 param->endChangeGesture();
                 automationGestureActive = false;
             }
+            
+            param->setValueNotifyingHost(normalizedGain);
         }
     }
     else if (automationGestureActive)
     {
-        // End any active gesture when switching away from write modes
+        // Switched to Read mode while a gesture was active — close it
         if (auto* param = apvts.getParameter(gainOutputParamId))
-        {
             param->endChangeGesture();
-            automationGestureActive = false;
-        }
+        automationGestureActive = false;
     }
 
     // Apply output trim (makeup/reduction gain, -12 to +12 dB)
     float trimGain = juce::Decibels::decibelsToGain(outputTrimDb.load());
-    if (std::abs(trimGain - 1.0f) > 0.001f)  // Only if trim is not unity
+    if (std::abs(trimGain - 1.0f) > 0.001f)
     {
         for (int sample = 0; sample < numSamples; ++sample)
         {
-            for (int channel = 0; channel < juce::jmin(totalNumInputChannels, 2); ++channel)
+            for (int channel = 0; channel < numChannels; ++channel)
             {
                 float* channelData = buffer.getWritePointer(channel);
                 channelData[sample] = softClip(channelData[sample] * trimGain);
@@ -1273,13 +1337,12 @@ void VocalRiderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     {
         display->pushSamples(inputSamples.data(), outputSamples.data(), 
                              gainSamples.data(), numSamples);
-        // Use raw parameter value for immediate visual response
         display->setTargetLevel(targetLevelRaw);
     }
 
-    // Output metering - use RMS to match the gain-riding algorithm's detection
+    // Output metering - use RMS from main output bus only
     float outputRmsLevel = buffer.getRMSLevel(0, 0, numSamples);
-    if (totalNumInputChannels > 1)
+    if (numChannels > 1)
         outputRmsLevel = juce::jmax(outputRmsLevel, buffer.getRMSLevel(1, 0, numSamples));
     outputLevelDb.store(juce::Decibels::gainToDecibels(outputRmsLevel, -100.0f));
 }
@@ -1506,7 +1569,8 @@ void VocalRiderAudioProcessor::setNoiseFloor(float thresholdDb)
 
 bool VocalRiderAudioProcessor::hasSidechainInput() const
 {
-    return getTotalNumInputChannels() > 2;  // More than stereo means sidechain is connected
+    auto* bus = getBus(true, 1);
+    return bus != nullptr && bus->isEnabled() && bus->getNumberOfChannels() > 0;
 }
 
 void VocalRiderAudioProcessor::setAutomationMode(AutomationMode mode)
@@ -1694,55 +1758,7 @@ void VocalRiderAudioProcessor::loadPreset(int index)
 {
     const auto& presets = getFactoryPresets();
     if (index >= 0 && index < static_cast<int>(presets.size()))
-    {
-        const auto& preset = presets[static_cast<size_t>(index)];
-        
-        // Main knobs
-        if (auto* param = apvts.getParameter(targetLevelParamId))
-            param->setValueNotifyingHost(param->convertTo0to1(preset.targetLevel));
-        if (auto* param = apvts.getParameter(speedParamId))
-            param->setValueNotifyingHost(param->convertTo0to1(preset.speed));
-        if (auto* param = apvts.getParameter(rangeParamId))
-            param->setValueNotifyingHost(param->convertTo0to1(preset.range));
-        if (auto* param = apvts.getParameter(boostRangeParamId))
-            param->setValueNotifyingHost(param->convertTo0to1(preset.range));
-        if (auto* param = apvts.getParameter(cutRangeParamId))
-            param->setValueNotifyingHost(param->convertTo0to1(preset.range));
-        
-        // Timing parameters (update both APVTS and atomics so processBlock sync doesn't overwrite)
-        if (auto* param = apvts.getParameter(attackParamId))
-            param->setValueNotifyingHost(param->convertTo0to1(preset.attackMs));
-        if (auto* param = apvts.getParameter(releaseParamId))
-            param->setValueNotifyingHost(param->convertTo0to1(preset.releaseMs));
-        if (auto* param = apvts.getParameter(holdParamId))
-            param->setValueNotifyingHost(param->convertTo0to1(preset.holdMs));
-        attackMs.store(preset.attackMs);
-        releaseMs.store(preset.releaseMs);
-        holdMs.store(preset.holdMs);
-        
-        // Toggle settings (update APVTS parameters)
-        if (auto* param = apvts.getParameter(naturalModeParamId))
-            param->setValueNotifyingHost(preset.naturalMode ? 1.0f : 0.0f);
-        if (auto* param = apvts.getParameter(smartSilenceParamId))
-            param->setValueNotifyingHost(preset.smartSilence ? 1.0f : 0.0f);
-        naturalModeEnabled.store(preset.naturalMode);
-        smartSilenceEnabled.store(preset.smartSilence);
-        useLufsMode.store(preset.useLufs);
-        
-        // Advanced knobs (update APVTS parameters)
-        if (auto* param = apvts.getParameter(breathReductionParamId))
-            param->setValueNotifyingHost(param->convertTo0to1(preset.breathReduction));
-        if (auto* param = apvts.getParameter(transientPreservationParamId))
-            param->setValueNotifyingHost(param->convertTo0to1(preset.transientPreservation));
-        breathReductionDb.store(preset.breathReduction);
-        transientPreservation.store(preset.transientPreservation / 100.0f);  // Convert from % to 0-1
-        
-        // Noise floor: clamp to parameter range before setting APVTS
-        float nfClamped = juce::jmax(-60.0f, preset.noiseFloor);  // Parameter min is -60
-        if (auto* param = apvts.getParameter(noiseFloorParamId))
-            param->setValueNotifyingHost(param->convertTo0to1(nfClamped));
-        noiseFloorDb.store(nfClamped);
-    }
+        loadPresetFromData(presets[static_cast<size_t>(index)]);
 }
 
 void VocalRiderAudioProcessor::resetToDefaults()
@@ -1897,12 +1913,15 @@ void VocalRiderAudioProcessor::loadPresetFromData(const Preset& preset)
         param->setValueNotifyingHost(param->convertTo0to1(preset.targetLevel));
     if (auto* param = apvts.getParameter(speedParamId))
         param->setValueNotifyingHost(param->convertTo0to1(preset.speed));
+    float boost = (preset.boostRange >= 0.0f) ? preset.boostRange : preset.range;
+    float cut   = (preset.cutRange >= 0.0f)  ? preset.cutRange   : preset.range;
     if (auto* param = apvts.getParameter(rangeParamId))
         param->setValueNotifyingHost(param->convertTo0to1(preset.range));
     if (auto* param = apvts.getParameter(boostRangeParamId))
-        param->setValueNotifyingHost(param->convertTo0to1(preset.range));
+        param->setValueNotifyingHost(param->convertTo0to1(boost));
     if (auto* param = apvts.getParameter(cutRangeParamId))
-        param->setValueNotifyingHost(param->convertTo0to1(preset.range));
+        param->setValueNotifyingHost(param->convertTo0to1(cut));
+    setRangeLocked(preset.rangeLocked);
     
     // Timing parameters (update APVTS so processBlock sync doesn't overwrite)
     if (auto* param = apvts.getParameter(attackParamId))

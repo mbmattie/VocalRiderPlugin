@@ -20,10 +20,29 @@ WaveformDisplay::WaveformDisplay()
     lastFrameTime = juce::Time::getMillisecondCounterHiRes() / 1000.0;
     
     // Pre-allocate pendingData to avoid heap allocation on the audio thread
-    // (push_back into a full vector triggers realloc which is a real-time violation)
     pendingData.reserve(2048);
     
-    startTimerHz(30);  // 30Hz is plenty smooth and much lighter on CPU/GPU
+    addAndMakeVisible(zoomButton);
+    zoomButton.setToggled(adaptiveZoomEnabled);
+    zoomButton.onToggled = [this](bool on)
+    {
+        adaptiveZoomEnabled = on;
+        if (on)
+        {
+            zoomAnchorTarget = targetLevelDb.load();
+            zoomAnchorBoost = boostRangeDb.load();
+            zoomAnchorCut = cutRangeDb.load();
+            adaptiveZoomLocked = false;
+            adaptiveZoomingOut = false;
+            adaptiveZoomSettleFrames = 0;
+        }
+        else
+        {
+            resetAdaptiveZoom();
+        }
+    };
+    
+    startTimerHz(30);
 }
 
 WaveformDisplay::~WaveformDisplay()
@@ -43,6 +62,15 @@ void WaveformDisplay::resized()
     waveformArea = waveformArea.toNearestInt().toFloat();
     
     initializeWaveformImage();
+    
+    // Position zoom toggle button in top-left of waveform area
+    int zoomSize = 20;
+    int zoomMargin = 6;
+    zoomButton.setBounds(
+        static_cast<int>(waveformArea.getX()) + zoomMargin,
+        static_cast<int>(waveformArea.getY()) + zoomMargin,
+        zoomSize, zoomSize);
+    zoomButton.toFront(false);
     
     // Mark cached images for regeneration
     backgroundNeedsRedraw = true;
@@ -79,6 +107,9 @@ void WaveformDisplay::initializeWaveformImage()
         
         // Raw data history for rebuilding on zoom changes
         columnRawData.assign(static_cast<size_t>(imageWidth), SampleData{});
+        
+        // Sidechain trace buffer
+        sidechainTraceBuffer.assign(static_cast<size_t>(imageWidth), -100.0f);
         
         // Reset scroll state
         scrollAccumulator = 0.0;
@@ -149,19 +180,57 @@ float WaveformDisplay::gainDbToImageY(float gainDb, float imgHeight) const
 
 void WaveformDisplay::updateAdaptiveZoom()
 {
-    float target = targetLevelDb.load();
-    float boost = boostRangeDb.load();
-    float cut = cutRangeDb.load();
+    // Handle smooth zoom-out when disabled (faster coeff for snappier settle)
+    if (adaptiveZoomingOut)
+    {
+        constexpr float zoomOutCoeff = 0.12f;
+        
+        displayFloor += (adaptiveFloorMin - displayFloor) * zoomOutCoeff;
+        displayCeiling += (adaptiveCeilingMax - displayCeiling) * zoomOutCoeff;
+        
+        bool floorDone = std::abs(displayFloor - adaptiveFloorMin) < 0.01f;
+        bool ceilingDone = std::abs(displayCeiling - adaptiveCeilingMax) < 0.01f;
+        
+        if (floorDone && ceilingDone)
+        {
+            displayFloor = adaptiveFloorMin;
+            displayCeiling = adaptiveCeilingMax;
+            adaptiveZoomingOut = false;
+        }
+        
+        // Always redraw while zooming out so the target line stays in sync
+        rebuildWaveformFromRawData();
+        staticOverlayNeedsRedraw = true;
+        return;
+    }
+    
+    if (!adaptiveZoomEnabled)
+        return;
+    
+    if (adaptiveZoomLocked)
+        return;
+    
+    if (!hasActiveAudio)
+        return;
+    
+    // Use the frozen anchor values captured when zoom was enabled, so that
+    // subsequent target/range knob changes don't reset or chase the zoom window
+    float target = zoomAnchorTarget;
+    float boost = zoomAnchorBoost;
+    float cut = zoomAnchorCut;
     
     // Show enough range to see target ± margin, plus the boost/cut range lines
     float neededCeiling = target + boost + 4.0f;
     float neededFloor = target - cut - 4.0f;
     
-    // Ensure at least adaptiveMargin dB above and below target
-    neededCeiling = juce::jmax(neededCeiling, target + adaptiveMargin);
-    neededFloor = juce::jmin(neededFloor, target - adaptiveMargin);
+    // Bias upward: show more range below target than above, keeping the
+    // waveform visually centered between the display top and the knob area
+    float marginAbove = adaptiveMargin * 0.6f;  // Less headroom above
+    float marginBelow = adaptiveMargin * 1.4f;  // More space below
     
-    // Clamp to absolute limits
+    neededCeiling = juce::jmax(neededCeiling, target + marginAbove);
+    neededFloor = juce::jmin(neededFloor, target - marginBelow);
+    
     neededCeiling = juce::jmin(neededCeiling, adaptiveCeilingMax);
     neededFloor = juce::jmax(neededFloor, adaptiveFloorMin);
     
@@ -169,26 +238,45 @@ void WaveformDisplay::updateAdaptiveZoom()
     float neededRange = neededCeiling - neededFloor;
     if (neededRange < 30.0f)
     {
-        float expand = (30.0f - neededRange) / 2.0f;
-        neededCeiling = juce::jmin(neededCeiling + expand, adaptiveCeilingMax);
-        neededFloor = juce::jmax(neededFloor - expand, adaptiveFloorMin);
+        // Expand asymmetrically: more downward
+        float expandAbove = (30.0f - neededRange) * 0.35f;
+        float expandBelow = (30.0f - neededRange) * 0.65f;
+        neededCeiling = juce::jmin(neededCeiling + expandAbove, adaptiveCeilingMax);
+        neededFloor = juce::jmax(neededFloor - expandBelow, adaptiveFloorMin);
     }
     
     displayCeilingTarget = neededCeiling;
     displayFloorTarget = neededFloor;
     
-    // Smooth transition
     float prevFloor = displayFloor;
     float prevCeiling = displayCeiling;
     displayFloor += (displayFloorTarget - displayFloor) * adaptiveSmoothCoeff;
     displayCeiling += (displayCeilingTarget - displayCeiling) * adaptiveSmoothCoeff;
     
-    // If the range changed meaningfully, rebuild waveform positions and redraw overlays
-    if (std::abs(displayFloor - prevFloor) > 0.05f || std::abs(displayCeiling - prevCeiling) > 0.05f)
+    bool moving = std::abs(displayFloor - prevFloor) > 0.001f 
+               || std::abs(displayCeiling - prevCeiling) > 0.001f;
+    
+    if (moving)
     {
         rebuildWaveformFromRawData();
         staticOverlayNeedsRedraw = true;
+        adaptiveZoomSettleFrames = 0;
     }
+    else
+    {
+        adaptiveZoomSettleFrames++;
+        if (adaptiveZoomSettleFrames >= adaptiveZoomSettleThreshold)
+            adaptiveZoomLocked = true;
+    }
+}
+
+void WaveformDisplay::resetAdaptiveZoom()
+{
+    adaptiveZoomLocked = false;
+    adaptiveZoomSettleFrames = 0;
+    displayFloorTarget = adaptiveFloorMin;
+    displayCeilingTarget = adaptiveCeilingMax;
+    adaptiveZoomingOut = true;
 }
 
 //==============================================================================
@@ -249,7 +337,7 @@ void WaveformDisplay::mouseDrag(const juce::MouseEvent& event)
     
     if (currentDragTarget == DragTarget::TargetHandle)
     {
-        float newTarget = juce::jlimit(-40.0f, 0.0f, dragStartValue + deltaDb);
+        float newTarget = juce::jlimit(-50.0f, 0.0f, dragStartValue + deltaDb);
         targetLevelDb.store(newTarget);
         if (onTargetChanged) onTargetChanged(newTarget);
     }
@@ -308,7 +396,7 @@ void WaveformDisplay::mouseMove(const juce::MouseEvent& event)
 
 void WaveformDisplay::setTargetLevel(float targetDb)
 {
-    float clamped = juce::jlimit(-40.0f, 0.0f, targetDb);
+    float clamped = juce::jlimit(-50.0f, 0.0f, targetDb);
     float prev = targetLevelDb.exchange(clamped);
     if (std::abs(prev - clamped) > 0.1f) staticElementsChanged = true;
 }
@@ -513,6 +601,7 @@ void WaveformDisplay::shiftWaveformImage(int pixels)
     shiftBuffer(outputTopBuffer, defaultY);
     shiftBuffer(outputBottomBuffer, defaultY);
     shiftBuffer(gainCurveBuffer, 0.0f);
+    shiftBuffer(sidechainTraceBuffer, -100.0f);
     
     // Shift raw data history
     if (!columnRawData.empty())
@@ -538,6 +627,10 @@ void WaveformDisplay::storeColumnData(int x, const SampleData& data)
     
     float h = static_cast<float>(imageHeight);
     size_t idx = static_cast<size_t>(x);
+    
+    // Store sidechain level for this column
+    if (idx < sidechainTraceBuffer.size())
+        sidechainTraceBuffer[idx] = sidechainLevelDb.load();
     
     // Store raw data for rebuilding on zoom changes
     if (idx < columnRawData.size())
@@ -1197,22 +1290,26 @@ void WaveformDisplay::paint(juce::Graphics& g)
     
     // Draw Natural Mode phrase indicator (dynamic - changes per frame)
     if (naturalModeActive)
-    {
         drawPhraseIndicator(g);
-    }
+    
+    // Draw sidechain indicator (stacks below Natural Mode indicator)
+    if (sidechainActive.load())
+        drawSidechainIndicator(g);
     
     // Clip to waveformArea for rendering
     g.saveState();
     g.reduceClipRegion(waveformArea.toNearestInt());
+    
+    // Draw sidechain RMS trace line (behind waveforms)
+    if (sidechainActive.load())
+        drawSidechainTrace(g);
     
     // Draw waveforms as closed paths (fill + stroke together)
     drawWaveformPaths(g);
     
     // Draw smooth gain curve path (fades during silence) - on top of waveforms
     if (gainCurveOpacity > 0.02f)
-    {
         drawGainCurvePath(g);
-    }
     
     g.restoreState();
     
@@ -1767,4 +1864,177 @@ void WaveformDisplay::drawPhraseIndicator(juce::Graphics& g)
     // Highlight on dot (specular) - reduced
     g.setColour(juce::Colours::white.withAlpha(phraseActive ? 0.25f : 0.10f));
     g.fillEllipse(x + 2.0f, y + 1.5f, indicatorSize * 0.3f, indicatorSize * 0.3f);
+}
+
+//==============================================================================
+// Sidechain display
+
+void WaveformDisplay::drawSidechainTrace(juce::Graphics& g)
+{
+    if (sidechainTraceBuffer.empty() || imageWidth <= 0 || waveformArea.isEmpty())
+        return;
+    
+    float offsetX = waveformArea.getX();
+    float offsetY = waveformArea.getY();
+    
+    juce::Path tracePath;
+    bool started = false;
+    
+    for (int i = 0; i < imageWidth; ++i)
+    {
+        float scDb = sidechainTraceBuffer[static_cast<size_t>(i)];
+        if (scDb <= -90.0f) 
+        {
+            started = false;
+            continue;
+        }
+        
+        float y = dbToY(scDb);
+        float x = offsetX + static_cast<float>(i);
+        
+        if (!started)
+        {
+            tracePath.startNewSubPath(x, y);
+            started = true;
+        }
+        else
+        {
+            tracePath.lineTo(x, y);
+        }
+    }
+    
+    if (!tracePath.isEmpty())
+    {
+        g.setColour(juce::Colour(0xFF6AAABB).withAlpha(0.45f));
+        g.strokePath(tracePath, juce::PathStrokeType(1.5f, juce::PathStrokeType::curved,
+                                                      juce::PathStrokeType::rounded));
+    }
+}
+
+void WaveformDisplay::drawSidechainIndicator(juce::Graphics& g)
+{
+    float indicatorSize = 6.0f;
+    float padding = 10.0f;
+    
+    // Position below Natural Mode indicator if it's active, otherwise at top-right
+    float yOffset = naturalModeActive ? 24.0f : 0.0f;
+    
+    float x = waveformArea.getRight() - ioMeterWidth - indicatorSize - padding;
+    float y = waveformArea.getY() + padding + yOffset;
+    
+    juce::Rectangle<float> pillArea(x - 22, y - 2, 32 + indicatorSize, indicatorSize + 4);
+    
+    g.setColour(juce::Colour(0x50000000));
+    g.fillRoundedRectangle(pillArea, (indicatorSize + 4) / 2.0f);
+    
+    g.setFont(CustomLookAndFeel::getPluginFont(9.0f, true));
+    g.setColour(juce::Colour(0xC0FFFFFF));
+    g.drawText("SC", pillArea.withTrimmedRight(indicatorSize + 4), juce::Justification::centred);
+    
+    // Active indicator dot (teal when receiving signal)
+    float scLevel = sidechainLevelDb.load();
+    juce::Colour dotColour = (scLevel > -60.0f) 
+        ? juce::Colour(0xFF6AAABB)   // Teal when signal present
+        : juce::Colour(0xFF5A6068);  // Dim gray when no signal
+    
+    if (scLevel > -60.0f)
+    {
+        g.setColour(dotColour.withAlpha(0.20f));
+        g.fillEllipse(x - 1, y - 1, indicatorSize + 2, indicatorSize + 2);
+    }
+    
+    g.setColour(dotColour);
+    g.fillEllipse(x, y, indicatorSize, indicatorSize);
+    
+    g.setColour(juce::Colours::white.withAlpha(scLevel > -60.0f ? 0.25f : 0.10f));
+    g.fillEllipse(x + 2.0f, y + 1.5f, indicatorSize * 0.3f, indicatorSize * 0.3f);
+}
+
+//==============================================================================
+// ZoomToggleButton
+
+WaveformDisplay::ZoomToggleButton::ZoomToggleButton()
+{
+    setMouseCursor(juce::MouseCursor::PointingHandCursor);
+}
+
+void WaveformDisplay::ZoomToggleButton::ensureIconCached(juce::Colour col)
+{
+    if (cachedIcon != nullptr && cachedIconColour == col)
+        return;
+    
+    cachedIconColour = col;
+    juce::String hex = col.toDisplayString(false);
+    juce::String svg =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\">"
+        "<path fill=\"#" + hex + "\" d=\""
+        "M3 8c0 .55.45 1 1 1h4c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1s-1 .45-1 1v1.59"
+        "L4.62 3.21a.996.996 0 1 0-1.41 1.41L5.59 7H4c-.55 0-1 .45-1 1"
+        "m17-1h-1.59l2.38-2.38a.996.996 0 1 0-1.41-1.41L17 5.59V4c0-.55-.45-1-1-1"
+        "s-1 .45-1 1v4c0 .55.45 1 1 1h4c.55 0 1-.45 1-1s-.45-1-1-1"
+        "M4 17h1.59l-2.38 2.38a.996.996 0 1 0 1.41 1.41L7 18.41V20c0 .55.45 1 1 1"
+        "s1-.45 1-1v-4c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1s.45 1 1 1"
+        "m17-1c0-.55-.45-1-1-1h-4c-.55 0-1 .45-1 1v4c0 .55.45 1 1 1s1-.45 1-1v-1.59"
+        "l2.38 2.38a.996.996 0 1 0 1.41-1.41L18.41 17H20c.55 0 1-.45 1-1"
+        "\"/></svg>";
+    
+    auto xml = juce::XmlDocument::parse(svg);
+    if (xml != nullptr)
+        cachedIcon = juce::Drawable::createFromSVG(*xml);
+}
+
+void WaveformDisplay::ZoomToggleButton::paint(juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat();
+    
+    auto activeCol = CustomLookAndFeel::getAccentColour();
+    auto dimCol = CustomLookAndFeel::getDimTextColour();
+    
+    juce::Colour iconCol = toggled ? activeCol : dimCol;
+    if (hovering)
+        iconCol = iconCol.brighter(0.3f);
+    
+    if (hovering)
+    {
+        g.setColour(CustomLookAndFeel::getSurfaceLightColour().withAlpha(0.4f));
+        g.fillRoundedRectangle(bounds, 3.0f);
+    }
+    
+    if (toggled)
+    {
+        g.setColour(activeCol.withAlpha(0.15f));
+        g.fillRoundedRectangle(bounds, 3.0f);
+    }
+    
+    ensureIconCached(iconCol);
+    if (cachedIcon != nullptr)
+    {
+        float iconSize = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.75f;
+        auto iconBounds = bounds.withSizeKeepingCentre(iconSize, iconSize);
+        cachedIcon->setTransformToFit(iconBounds, juce::RectanglePlacement::centred);
+        cachedIcon->draw(g, 1.0f);
+    }
+}
+
+void WaveformDisplay::ZoomToggleButton::mouseDown(const juce::MouseEvent&)
+{
+    toggled = !toggled;
+    repaint();
+    if (onToggled) onToggled(toggled);
+}
+
+void WaveformDisplay::ZoomToggleButton::mouseEnter(const juce::MouseEvent& e)
+{
+    juce::Component::mouseEnter(e);
+    hovering = true;
+    repaint();
+    if (onMouseEnterCb) onMouseEnterCb();
+}
+
+void WaveformDisplay::ZoomToggleButton::mouseExit(const juce::MouseEvent& e)
+{
+    juce::Component::mouseExit(e);
+    hovering = false;
+    repaint();
+    if (onMouseExitCb) onMouseExitCb();
 }
