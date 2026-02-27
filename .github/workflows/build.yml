@@ -296,15 +296,33 @@ jobs:
         if ($installer) {
           Write-Host "Installing Eden SDK: $($installer.FullName)"
           Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait -NoNewWindow
-          Start-Sleep -Seconds 5
-          Write-Host "Eden SDK installed."
+          Start-Sleep -Seconds 10
+          Write-Host "Eden SDK install process completed."
           
-          $wraptool = Get-ChildItem -Path "C:\Program Files" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          $iloktool = Get-ChildItem -Path "C:\Program Files" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          Write-Host "=== Searching for PACE tools ==="
+          Write-Host "Checking known PACE locations..."
+          $searchPaths = @(
+            "C:\Program Files\PACE Anti-Piracy",
+            "C:\Program Files (x86)\PACE Anti-Piracy",
+            "C:\Program Files\PACEAntiPiracy",
+            "C:\Program Files (x86)\PACEAntiPiracy",
+            "C:\Program Files\Common Files\PACE Anti-Piracy",
+            "C:\Program Files\Common Files\Avid"
+          )
+          foreach ($p in $searchPaths) {
+            if (Test-Path $p) {
+              Write-Host "Found directory: $p"
+              Get-ChildItem -Path $p -Recurse -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
+            }
+          }
+          
+          Write-Host "=== Broad search for wraptool.exe ==="
+          $wraptool = Get-ChildItem -Path "C:\" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          $iloktool = Get-ChildItem -Path "C:\" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($wraptool) { Write-Host "Found wraptool: $($wraptool.FullName)" }
-          else { Write-Host "WARNING: wraptool not found after install." }
+          else { Write-Host "WARNING: wraptool not found anywhere on C:\" }
           if ($iloktool) { Write-Host "Found iloktool: $($iloktool.FullName)" }
-          else { Write-Host "WARNING: iloktool not found after install." }
+          else { Write-Host "WARNING: iloktool not found anywhere on C:\" }
         } else {
           Write-Host "Eden SDK installer not found. AAX signing will be skipped."
         }
