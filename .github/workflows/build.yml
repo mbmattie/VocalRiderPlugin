@@ -91,37 +91,36 @@ jobs:
           --dir $RUNNER_TEMP/eden
       continue-on-error: true
     
-    - name: Install Eden SDK & iLok License Manager (macOS)
+    - name: Install Eden SDK (macOS)
       run: |
-        # Install iLok License Manager
-        curl -o $RUNNER_TEMP/LicenseSupportInstallerMac.zip \
-          https://installers.ilok.com/iloklicensemanager/LicenseSupportInstallerMac.zip
-        unzip $RUNNER_TEMP/LicenseSupportInstallerMac.zip -d $RUNNER_TEMP/ilok
-        hdiutil attach $RUNNER_TEMP/ilok/LicenseSupportInstallerMac*.dmg
-        ilokVol=$(ls /Volumes | grep "License")
-        sudo installer -pkg "/Volumes/$ilokVol/License Support.pkg" -target LocalSystem
-        hdiutil detach "/Volumes/$ilokVol" || true
-        
-        # Install Eden SDK
         DMG_FILE=$(ls $RUNNER_TEMP/eden/*.dmg 2>/dev/null | head -1)
-        if [ -n "$DMG_FILE" ]; then
-          echo "Installing Eden SDK from $DMG_FILE"
-          hdiutil attach "$DMG_FILE"
-          edenVol=$(ls /Volumes | grep -i eden | head -1)
-          if [ -n "$edenVol" ]; then
-            PKG_FILE=$(find "/Volumes/$edenVol" -name "*.pkg" -maxdepth 1 | head -1)
-            if [ -n "$PKG_FILE" ]; then
-              sudo installer -pkg "$PKG_FILE" -target LocalSystem
-              echo "Eden SDK installed."
-            else
-              echo "No .pkg found in DMG. Listing contents:"
-              ls "/Volumes/$edenVol"
-            fi
-            hdiutil detach "/Volumes/$edenVol" || true
-          fi
-        else
-          echo "Eden SDK DMG not found. AAX signing will be skipped."
+        if [ -z "$DMG_FILE" ]; then
+          echo "Eden SDK DMG not found. AAX PACE signing will be skipped."
+          exit 0
         fi
+        
+        echo "Installing Eden SDK from $DMG_FILE"
+        hdiutil attach "$DMG_FILE"
+        edenVol=$(ls /Volumes | grep -i eden | head -1)
+        if [ -n "$edenVol" ]; then
+          PKG_FILE=$(find "/Volumes/$edenVol" -name "*.pkg" -maxdepth 1 | head -1)
+          if [ -n "$PKG_FILE" ]; then
+            sudo installer -pkg "$PKG_FILE" -target LocalSystem
+            echo "Eden SDK installed."
+          else
+            echo "No .pkg found in DMG. Listing contents:"
+            ls "/Volumes/$edenVol"
+          fi
+          hdiutil detach "/Volumes/$edenVol" || true
+        fi
+        
+        # Verify tools are available
+        if [ -f "/Applications/PACEAntiPiracy/Eden/Fusion/Versions/5/bin/wraptool" ]; then
+          echo "wraptool found."
+        else
+          echo "WARNING: wraptool not found after install."
+        fi
+        which iloktool 2>/dev/null && echo "iloktool found." || echo "WARNING: iloktool not found."
       continue-on-error: true
     
     - name: Sign macOS AAX (PACE Cloud Signing)
@@ -275,45 +274,37 @@ jobs:
         dir build\VocalRider_artefacts\Release\VST3\ /s
       shell: cmd
     
-    - name: Install iLok License Manager (Windows)
-      run: |
-        $zipUrl = "https://installers.ilok.com/iloklicensemanager/LicenseSupportInstallerWin.zip"
-        $zipPath = "$env:RUNNER_TEMP\LicenseSupportInstallerWin.zip"
-        $extractPath = "$env:RUNNER_TEMP\ilok"
-        
-        Write-Host "Downloading iLok License Manager..."
-        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
-        Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
-        
-        $installer = Get-ChildItem -Path $extractPath -Filter "*.exe" -Recurse | Select-Object -First 1
-        if ($installer) {
-          Write-Host "Installing iLok License Manager: $($installer.FullName)"
-          Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait -NoNewWindow
-          Write-Host "iLok License Manager installed."
-        } else {
-          Write-Host "WARNING: iLok installer not found in zip."
-        }
-      shell: pwsh
-      continue-on-error: true
-    
-    - name: Download Eden SDK
+    - name: Download & Install Eden SDK (Windows)
       env:
         GH_TOKEN: ${{ secrets.BUILD_TOOLS_TOKEN }}
       run: |
+        Write-Host "Downloading Eden SDK from build-tools repo..."
+        New-Item -ItemType Directory -Path "$env:RUNNER_TEMP\eden" -Force | Out-Null
+        
         gh release download eden-sdk-v5.10.4 `
           --repo mbmattie/build-tools `
           --pattern "*.exe" `
-          --dir $env:RUNNER_TEMP\eden
-      shell: pwsh
-      continue-on-error: true
-    
-    - name: Install Eden SDK
-      run: |
+          --dir "$env:RUNNER_TEMP\eden"
+        
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "ERROR: Failed to download Eden SDK. Check that BUILD_TOOLS_TOKEN secret is set and has repo scope."
+          Write-Host "AAX signing will be skipped."
+          exit 0
+        }
+        
         $installer = Get-ChildItem -Path "$env:RUNNER_TEMP\eden" -Filter "*.exe" | Select-Object -First 1
         if ($installer) {
           Write-Host "Installing Eden SDK: $($installer.FullName)"
           Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait -NoNewWindow
+          Start-Sleep -Seconds 5
           Write-Host "Eden SDK installed."
+          
+          $wraptool = Get-ChildItem -Path "C:\Program Files" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          $iloktool = Get-ChildItem -Path "C:\Program Files" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($wraptool) { Write-Host "Found wraptool: $($wraptool.FullName)" }
+          else { Write-Host "WARNING: wraptool not found after install." }
+          if ($iloktool) { Write-Host "Found iloktool: $($iloktool.FullName)" }
+          else { Write-Host "WARNING: iloktool not found after install." }
         } else {
           Write-Host "Eden SDK installer not found. AAX signing will be skipped."
         }
