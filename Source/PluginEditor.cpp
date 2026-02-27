@@ -823,7 +823,214 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     }
     startTimerHz(30);
     updateAdvancedControls();
+
+#if MAGICRIDE_LITE
+    setupLiteRestrictions();
+#endif
 }
+
+#if MAGICRIDE_LITE
+void VocalRiderAudioProcessorEditor::setupLiteRestrictions()
+{
+    //==================================================================
+    // LITE BADGE — small rounded "LITE" tag after the logo
+    liteBadgeLabel.setText("LITE", juce::dontSendNotification);
+    liteBadgeLabel.setFont(CustomLookAndFeel::getPluginFont(8.0f, true));
+    liteBadgeLabel.setColour(juce::Label::textColourId, juce::Colour(0xFFD0D4DC));
+    liteBadgeLabel.setJustificationType(juce::Justification::centred);
+    addAndMakeVisible(liteBadgeLabel);
+
+    //==================================================================
+    // UPGRADE STRIP — persistent bar at the very bottom
+    upgradeStripLabel.setText("Upgrade to magic.RIDE Full", juce::dontSendNotification);
+    upgradeStripLabel.setFont(CustomLookAndFeel::getPluginFont(10.0f, true));
+    upgradeStripLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getAccentColour());
+    upgradeStripLabel.setJustificationType(juce::Justification::centred);
+    upgradeStripLabel.setInterceptsMouseClicks(true, false);
+    upgradeStripLabel.setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    upgradeStripLabel.addMouseListener(this, false);
+    addAndMakeVisible(upgradeStripLabel);
+
+    //==================================================================
+    // LOCK MAIN CONTROLS — target, range, dual range knob, range lock
+    auto disableControl = [this](juce::Component& comp) {
+        comp.setEnabled(false);
+        comp.setAlpha(liteLockedAlpha);
+    };
+
+    disableControl(targetSlider);
+    disableControl(dualRangeKnob);
+    disableControl(rangeLockButton);
+    disableControl(rangeSlider);
+    disableControl(boostRangeSlider);
+    disableControl(cutRangeSlider);
+
+    // LOCK ADVANCED CONTROLS
+    disableControl(attackSlider);
+    disableControl(releaseSlider);
+    disableControl(holdSlider);
+    disableControl(breathReductionSlider);
+    disableControl(transientPreservationSlider);
+    disableControl(noiseFloorSlider);
+    disableControl(outputTrimMeter);
+    disableControl(lookAheadComboBox);
+    disableControl(detectionModeComboBox);
+
+    // LOCK AUTOMATION MODE
+    disableControl(automationModeComboBox);
+
+    // LOCK PRESETS, A/B, UNDO/REDO (lite uses defaults only)
+    disableControl(presetComboBox);
+    disableControl(prevPresetButton);
+    disableControl(nextPresetButton);
+    disableControl(abCompareButton);
+    disableControl(undoButton);
+    disableControl(redoButton);
+
+    // Dim associated labels for locked controls
+    targetLabel.setAlpha(liteLockedAlpha);
+    rangeLabel.setAlpha(liteLockedAlpha);
+    automationLabel.setAlpha(liteLockedAlpha);
+
+    // Re-enable mouse clicks on locked controls so we can intercept them for upgrade dialog.
+    // setEnabled(false) blocks normal interaction but we still want to catch clicks
+    // to show the upgrade prompt. We add 'this' as a mouse listener on each.
+    auto enableClicksForUpgrade = [this](juce::Component& comp) {
+        comp.setInterceptsMouseClicks(true, true);
+        comp.addMouseListener(this, false);
+    };
+    enableClicksForUpgrade(targetSlider);
+    enableClicksForUpgrade(dualRangeKnob);
+    enableClicksForUpgrade(rangeLockButton);
+    enableClicksForUpgrade(automationModeComboBox);
+    enableClicksForUpgrade(presetComboBox);
+    enableClicksForUpgrade(prevPresetButton);
+    enableClicksForUpgrade(nextPresetButton);
+    enableClicksForUpgrade(abCompareButton);
+    enableClicksForUpgrade(undoButton);
+    enableClicksForUpgrade(redoButton);
+    enableClicksForUpgrade(attackSlider);
+    enableClicksForUpgrade(releaseSlider);
+    enableClicksForUpgrade(holdSlider);
+    enableClicksForUpgrade(breathReductionSlider);
+    enableClicksForUpgrade(transientPreservationSlider);
+    enableClicksForUpgrade(noiseFloorSlider);
+    enableClicksForUpgrade(outputTrimMeter);
+    enableClicksForUpgrade(lookAheadComboBox);
+    enableClicksForUpgrade(detectionModeComboBox);
+
+    //==================================================================
+    // AUTO-TARGET BADGE — flashing indicator in top-right corner
+    autoTargetBadgeLabel.setText("AUTO-TARGET", juce::dontSendNotification);
+    autoTargetBadgeLabel.setFont(CustomLookAndFeel::getPluginFont(9.0f, true));
+    autoTargetBadgeLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getAccentColour());
+    autoTargetBadgeLabel.setJustificationType(juce::Justification::centred);
+    autoTargetBadgeLabel.setVisible(false);
+    addAndMakeVisible(autoTargetBadgeLabel);
+
+    //==================================================================
+    // AUTO-TARGET ON by default in lite version
+    autoTargetButton.setToggleState(true, juce::dontSendNotification);
+    autoTargetButton.setPulsing(true);
+    learnCountdown = 90;
+    learnMinDb = 6.0f;
+    learnMaxDb = -100.0f;
+    learnSumDb = 0.0f;
+    learnSampleCount = 0;
+}
+
+void VocalRiderAudioProcessorEditor::showLiteUpgradeDialog()
+{
+    if (liteUpgradeOverlay != nullptr)
+        return;
+
+    liteUpgradeOverlay = std::make_unique<juce::Component>();
+    auto* overlay = liteUpgradeOverlay.get();
+    overlay->setBounds(getLocalBounds());
+    overlay->setAlwaysOnTop(true);
+
+    struct UpgradeOverlay : public juce::Component
+    {
+        juce::Rectangle<float> dlgBounds;
+        void paint(juce::Graphics& g) override
+        {
+            g.setColour(juce::Colours::black.withAlpha(0.45f));
+            g.fillRect(getLocalBounds());
+
+            g.setColour(juce::Colours::black.withAlpha(0.5f));
+            g.fillRoundedRectangle(dlgBounds.translated(0.0f, 6.0f), 12.0f);
+
+            juce::ColourGradient bgGrad(
+                juce::Colour(0xFF282C34), dlgBounds.getX(), dlgBounds.getY(),
+                juce::Colour(0xFF1A1D22), dlgBounds.getX(), dlgBounds.getBottom(), false);
+            g.setGradientFill(bgGrad);
+            g.fillRoundedRectangle(dlgBounds, 12.0f);
+
+            g.setColour(CustomLookAndFeel::getBorderColour().withAlpha(0.6f));
+            g.drawRoundedRectangle(dlgBounds, 12.0f, 1.0f);
+
+            g.setColour(CustomLookAndFeel::getAccentColour().withAlpha(0.5f));
+            g.fillRoundedRectangle(dlgBounds.getX() + 30, dlgBounds.getY() + 4,
+                                   dlgBounds.getWidth() - 60, 2.0f, 1.0f);
+
+            float y = dlgBounds.getY() + 28.0f;
+
+            g.setColour(juce::Colour(0xFFD0D4DC));
+            g.setFont(CustomLookAndFeel::getPluginFont(14.0f, true));
+            g.drawText("Unlock Full Control", dlgBounds.withY(y).withHeight(22.0f),
+                       juce::Justification::centredTop);
+            y += 30.0f;
+
+            g.setFont(CustomLookAndFeel::getPluginFont(10.0f, false));
+            g.setColour(juce::Colour(0xFF9098A8));
+            g.drawText("Get target, range, attack, hold, automation,",
+                       dlgBounds.withY(y).withHeight(16.0f), juce::Justification::centredTop);
+            y += 16.0f;
+            g.drawText("presets, and more with magic.RIDE.",
+                       dlgBounds.withY(y).withHeight(16.0f), juce::Justification::centredTop);
+        }
+        void mouseDown(const juce::MouseEvent&) override {}
+    };
+
+    float dialogW = 280.0f;
+    float dialogH = 140.0f;
+    float cx = static_cast<float>(getWidth()) / 2.0f;
+    float cy = static_cast<float>(getHeight()) / 2.0f;
+    auto dialogBounds = juce::Rectangle<float>(cx - dialogW / 2.0f, cy - dialogH / 2.0f, dialogW, dialogH);
+
+    auto* bg = new UpgradeOverlay();
+    bg->dlgBounds = dialogBounds;
+    bg->setBounds(getLocalBounds());
+    bg->setInterceptsMouseClicks(true, true);
+    overlay->addAndMakeVisible(bg);
+    bg->toBack();
+
+    auto* upgradeBtn = new juce::TextButton("Get magic.RIDE");
+    upgradeBtn->setColour(juce::TextButton::buttonColourId, CustomLookAndFeel::getAccentColour().withAlpha(0.5f));
+    upgradeBtn->setColour(juce::TextButton::textColourOffId, juce::Colour(0xFFD0D4DC));
+    upgradeBtn->setBounds(static_cast<int>(dialogBounds.getCentreX()) - 70,
+                          static_cast<int>(dialogBounds.getBottom()) - 42, 140, 28);
+    upgradeBtn->onClick = [] {
+        juce::URL("https://musicbymattie.com/magic-ride").launchInDefaultBrowser();
+    };
+    overlay->addAndMakeVisible(upgradeBtn);
+
+    auto* closeBtn = new juce::TextButton("X");
+    closeBtn->setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
+    closeBtn->setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF8A8F98));
+    closeBtn->setBounds(static_cast<int>(dialogBounds.getRight()) - 28,
+                        static_cast<int>(dialogBounds.getY()) + 6, 22, 22);
+    auto* overlayPtr = overlay;
+    closeBtn->onClick = [this, overlayPtr] {
+        removeChildComponent(overlayPtr);
+        liteUpgradeOverlay.reset();
+    };
+    overlay->addAndMakeVisible(closeBtn);
+
+    addAndMakeVisible(overlay);
+    overlay->toFront(true);
+}
+#endif
 
 VocalRiderAudioProcessorEditor::~VocalRiderAudioProcessorEditor()
 {
@@ -1368,6 +1575,36 @@ void VocalRiderAudioProcessorEditor::paint(juce::Graphics& g)
     // Very subtle top edge
     g.setColour(CustomLookAndFeel::getBorderColour().withAlpha(0.15f));
     g.drawHorizontalLine(static_cast<int>(bottomBounds.getY()), 0.0f, bounds.getWidth());
+
+#if MAGICRIDE_LITE
+    // LITE badge — small rounded rectangle behind the label
+    {
+        auto badgeBounds = liteBadgeLabel.getBounds().toFloat().expanded(2.0f, 1.0f);
+        g.setColour(CustomLookAndFeel::getAccentColour().withAlpha(0.6f));
+        g.fillRoundedRectangle(badgeBounds, 3.0f);
+    }
+
+    // AUTO-TARGET badge background (pulsing rounded rect)
+    if (autoTargetBadgeLabel.isVisible())
+    {
+        auto badgeBounds = autoTargetBadgeLabel.getBounds().toFloat().expanded(4.0f, 2.0f);
+        float alpha = autoTargetBadgeLabel.getAlpha();
+        g.setColour(CustomLookAndFeel::getAccentColour().withAlpha(0.12f * alpha));
+        g.fillRoundedRectangle(badgeBounds, 4.0f);
+        g.setColour(CustomLookAndFeel::getAccentColour().withAlpha(0.4f * alpha));
+        g.drawRoundedRectangle(badgeBounds, 4.0f, 1.0f);
+    }
+
+    // Upgrade strip — subtle accent-tinted bar at the very bottom
+    {
+        auto stripBounds = upgradeStripLabel.getBounds().toFloat();
+        g.setColour(CustomLookAndFeel::getAccentColour().withAlpha(0.06f));
+        g.fillRect(stripBounds);
+        g.setColour(CustomLookAndFeel::getBorderColour().withAlpha(0.2f));
+        g.drawHorizontalLine(static_cast<int>(stripBounds.getY()), 0.0f,
+                             static_cast<float>(getWidth()));
+    }
+#endif
     
     // Advanced panel is now painted by its own component (AdvancedPanelComponent)
 }
@@ -1391,6 +1628,16 @@ void VocalRiderAudioProcessorEditor::resized()
     // Hide separate titleLabel and brandLabel - they're now part of LogoComponent
     titleLabel.setBounds(-100, -100, 1, 1);
     brandLabel.setBounds(-100, -100, 1, 1);
+
+#if MAGICRIDE_LITE
+    // LITE badge — positioned at top-right corner of the brand tab
+    liteBadgeLabel.setBounds(brandTab.getRight() - 46, brandTab.getY() + 4, 34, 14);
+    liteBadgeLabel.toFront(false);
+
+    // AUTO-TARGET badge — top-right area of the main UI
+    autoTargetBadgeLabel.setBounds(getWidth() - 120, headerHeight + 8, 100, 18);
+    autoTargetBadgeLabel.toFront(false);
+#endif
     
     // Right controls area (everything else)
     auto controlsArea = headerArea.reduced(10, 0);
@@ -1459,6 +1706,13 @@ void VocalRiderAudioProcessorEditor::resized()
     // Resize button in bottom right corner (smaller icon)
     // Note: resizeButton is a child of bottomBar, so use local coordinates
     resizeButton.setBounds(bottomArea.getWidth() - resizeSize - 8, 4, resizeSize, resizeSize);
+
+#if MAGICRIDE_LITE
+    // Upgrade strip — centered at the bottom of the extended bottom bar
+    upgradeStripLabel.setBounds(bottomArea.getX(), bottomArea.getBottom() - 18,
+                                bottomArea.getWidth(), 18);
+    upgradeStripLabel.toFront(false);
+#endif
     
     // Control panel at bottom (above bottom bar)
     auto controlArea = bounds.removeFromBottom(controlPanelHeight);
@@ -1788,6 +2042,26 @@ void VocalRiderAudioProcessorEditor::timerCallback()
         // Ensure pulsing is stopped if button is manually turned off
         autoTargetButton.setPulsing(false);
     }
+
+#if MAGICRIDE_LITE
+    // Flashing AUTO-TARGET badge while learning is active
+    {
+        bool learning = autoTargetButton.getToggleState() && learnCountdown > 0;
+        autoTargetBadgeLabel.setVisible(learning);
+        if (learning)
+        {
+            autoTargetBadgePhase += 0.2f;
+            if (autoTargetBadgePhase > juce::MathConstants<float>::twoPi)
+                autoTargetBadgePhase -= juce::MathConstants<float>::twoPi;
+            float alpha = 0.5f + 0.5f * std::sin(autoTargetBadgePhase);
+            autoTargetBadgeLabel.setAlpha(alpha);
+        }
+        else
+        {
+            autoTargetBadgePhase = 0.0f;
+        }
+    }
+#endif
     
     // Hover tracking is now only for value tooltip display
     
@@ -1857,6 +2131,29 @@ bool VocalRiderAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
     }
     
     return false;  // Key not handled
+}
+
+void VocalRiderAudioProcessorEditor::mouseUp(const juce::MouseEvent& event)
+{
+#if MAGICRIDE_LITE
+    auto* source = event.eventComponent;
+
+    // Clicking the upgrade strip opens the purchase URL directly
+    if (source == &upgradeStripLabel)
+    {
+        juce::URL("https://musicbymattie.com/magic-ride").launchInDefaultBrowser();
+        return;
+    }
+
+    // Clicking any locked (disabled) control shows the upgrade dialog
+    if (source != nullptr && !source->isEnabled())
+    {
+        showLiteUpgradeDialog();
+        return;
+    }
+#else
+    juce::ignoreUnused(event);
+#endif
 }
 
 //==============================================================================

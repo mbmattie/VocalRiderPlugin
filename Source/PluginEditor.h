@@ -1793,6 +1793,7 @@ public:
     void resized() override;
     void timerCallback() override;
     bool keyPressed(const juce::KeyPress& key) override;
+    void mouseUp(const juce::MouseEvent& event) override;
     
 
 private:
@@ -1835,7 +1836,11 @@ private:
     // Bottom bar with resize button - more padding
     juce::Component bottomBar;
     ResizeButton resizeButton;
+#if MAGICRIDE_LITE
+    static constexpr int bottomBarHeight = 44;  // Extra room for upgrade strip
+#else
     static constexpr int bottomBarHeight = 26;  // More padding
+#endif
     
     // Automation mode selector (Off/Read/Touch/Latch/Write)
     juce::ComboBox automationModeComboBox;
@@ -2226,6 +2231,21 @@ private:
     static constexpr int largeHeight = 600;
     
     static constexpr int controlPanelHeight = 130;  // Extra room for even larger knobs
+
+#if MAGICRIDE_LITE
+    //==============================================================================
+    // Lite version — upgrade prompt and locked control helpers
+    juce::Label liteBadgeLabel;
+    juce::Label upgradeStripLabel;
+    juce::Label autoTargetBadgeLabel;
+    float autoTargetBadgePhase = 0.0f;
+    std::unique_ptr<juce::Component> liteUpgradeOverlay;
+
+    void showLiteUpgradeDialog();
+    void setupLiteRestrictions();
+
+    static constexpr float liteLockedAlpha = 0.35f;
+#endif
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VocalRiderAudioProcessorEditor)
 };

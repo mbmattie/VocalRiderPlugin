@@ -301,57 +301,63 @@ jobs:
         Write-Host "Installer: $($installer.FullName)"
         Write-Host "Installer size: $([math]::Round($installer.Length / 1MB, 1)) MB"
         
-        # Check installer type by examining PE headers
-        Write-Host "=== Attempting install with /VERYSILENT (Inno Setup) ==="
-        $proc = Start-Process -FilePath $installer.FullName `
-          -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-" `
-          -Wait -NoNewWindow -PassThru
-        Write-Host "Exit code: $($proc.ExitCode)"
-        Start-Sleep -Seconds 5
+        # Extract installer contents with 7-Zip (works on most Windows installers)
+        $extractDir = "$env:RUNNER_TEMP\eden-extracted"
+        Write-Host "=== Extracting installer with 7-Zip ==="
+        & "C:\Program Files\7-Zip\7z.exe" x "$($installer.FullName)" "-o$extractDir" -y
+        Write-Host "7-Zip exit code: $LASTEXITCODE"
         
-        # Check if that worked
-        $wraptool = Get-ChildItem -Path "C:\","D:\" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-        
-        if (-not $wraptool) {
-          Write-Host "Inno Setup flags didn't work. Trying /S (NSIS)..."
-          $proc = Start-Process -FilePath $installer.FullName `
-            -ArgumentList "/S" -Wait -NoNewWindow -PassThru
-          Write-Host "Exit code: $($proc.ExitCode)"
-          Start-Sleep -Seconds 5
-          $wraptool = Get-ChildItem -Path "C:\","D:\" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-        }
-        
-        if (-not $wraptool) {
-          Write-Host "NSIS flags didn't work. Trying InstallShield /s /v`"/qn`"..."
-          $proc = Start-Process -FilePath $installer.FullName `
-            -ArgumentList '/s','/v"/qn"' -Wait -NoNewWindow -PassThru
-          Write-Host "Exit code: $($proc.ExitCode)"
-          Start-Sleep -Seconds 5
-          $wraptool = Get-ChildItem -Path "C:\","D:\" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-        }
-        
-        Write-Host "=== Post-install search results ==="
-        # Check PACE directories on both drives
-        $paceDirs = @(
-          "C:\Program Files\PACE Anti-Piracy",
-          "C:\Program Files (x86)\PACE Anti-Piracy",
-          "C:\Program Files\PACEAntiPiracy",
-          "C:\Program Files (x86)\PACEAntiPiracy",
-          "D:\Program Files\PACE Anti-Piracy",
-          "D:\Program Files\PACEAntiPiracy"
-        )
-        foreach ($p in $paceDirs) {
-          if (Test-Path $p) {
-            Write-Host "Found: $p"
-            Get-ChildItem -Path $p -Recurse -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
+        # Show top-level extracted contents
+        if (Test-Path $extractDir) {
+          Write-Host "=== Extracted contents (top 3 levels) ==="
+          Get-ChildItem -Path $extractDir -Recurse -Depth 3 -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "  $($_.FullName)"
           }
+          
+          # Search extracted contents for wraptool
+          $wraptool = Get-ChildItem -Path $extractDir -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          $iloktool = Get-ChildItem -Path $extractDir -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          
+          if ($wraptool) {
+            Write-Host "FOUND wraptool in extracted contents: $($wraptool.FullName)"
+            # If there are nested archives (MSI, CAB), we may need a second extraction pass
+          } else {
+            Write-Host "wraptool not in top-level extract. Checking for nested MSI/CAB files..."
+            $msiFiles = Get-ChildItem -Path $extractDir -Include "*.msi","*.cab" -Recurse -ErrorAction SilentlyContinue
+            foreach ($msi in $msiFiles) {
+              Write-Host "Found nested archive: $($msi.FullName)"
+              $nestedDir = "$extractDir\nested_$($msi.BaseName)"
+              & "C:\Program Files\7-Zip\7z.exe" x "$($msi.FullName)" "-o$nestedDir" -y 2>$null
+              $wraptool = Get-ChildItem -Path $nestedDir -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($wraptool) {
+                Write-Host "FOUND wraptool in nested archive: $($wraptool.FullName)"
+                break
+              }
+            }
+          }
+          
+          $iloktool = Get-ChildItem -Path $extractDir -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          
+          if ($wraptool) {
+            # Copy tools to a known location
+            $toolsDir = "C:\PACETools"
+            New-Item -ItemType Directory -Path $toolsDir -Force | Out-Null
+            Copy-Item $wraptool.FullName "$toolsDir\wraptool.exe"
+            if ($iloktool) { Copy-Item $iloktool.FullName "$toolsDir\iloktool.exe" }
+            
+            # Also copy any DLLs from the same directory (wraptool may need them)
+            $wraptoolDir = $wraptool.Directory.FullName
+            Get-ChildItem -Path $wraptoolDir -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
+              Copy-Item $_.FullName "$toolsDir\"
+              Write-Host "Copied dependency: $($_.Name)"
+            }
+            Write-Host "PACE tools staged to $toolsDir"
+          } else {
+            Write-Host "ERROR: wraptool not found in extracted contents."
+          }
+        } else {
+          Write-Host "ERROR: 7-Zip extraction produced no output."
         }
-        
-        $iloktool = Get-ChildItem -Path "C:\","D:\" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($wraptool) { Write-Host "FOUND wraptool: $($wraptool.FullName)" }
-        else { Write-Host "ERROR: wraptool not found on any drive." }
-        if ($iloktool) { Write-Host "FOUND iloktool: $($iloktool.FullName)" }
-        else { Write-Host "WARNING: iloktool not found on any drive." }
       shell: pwsh
       continue-on-error: true
     
@@ -373,9 +379,20 @@ jobs:
           exit 0
         }
         
-        # Find wraptool and iloktool
-        $wraptool = Get-ChildItem -Path "C:\Program Files" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-        $iloktool = Get-ChildItem -Path "C:\Program Files" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        # Find wraptool and iloktool (check extracted tools location first, then Program Files)
+        $wraptool = $null
+        $iloktool = $null
+        if (Test-Path "C:\PACETools\wraptool.exe") {
+          $wraptool = Get-Item "C:\PACETools\wraptool.exe"
+          Write-Host "Using extracted wraptool: $($wraptool.FullName)"
+        }
+        if (Test-Path "C:\PACETools\iloktool.exe") {
+          $iloktool = Get-Item "C:\PACETools\iloktool.exe"
+        }
+        if (-not $wraptool) {
+          $wraptool = Get-ChildItem -Path "C:\Program Files","C:\Program Files (x86)" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          $iloktool = Get-ChildItem -Path "C:\Program Files","C:\Program Files (x86)" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
         
         if (-not $wraptool) {
           Write-Host "wraptool not found. Skipping AAX signing."

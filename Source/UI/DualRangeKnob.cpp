@@ -76,6 +76,8 @@ void DualRangeKnob::setLocked(bool isLocked)
 
 void DualRangeKnob::mouseDown(const juce::MouseEvent& event)
 {
+    if (!isEnabled()) return;
+
     currentDragRing = hitTestRing(event.position);
     if (currentDragRing == DragRing::None) return;
 
@@ -89,7 +91,7 @@ void DualRangeKnob::mouseDown(const juce::MouseEvent& event)
 
 void DualRangeKnob::mouseDrag(const juce::MouseEvent& event)
 {
-    if (currentDragRing == DragRing::None) return;
+    if (!isEnabled() || currentDragRing == DragRing::None) return;
 
     float deltaY = event.position.y - dragStartY;
     float deltaDrag = -deltaY * dragSensitivity;
