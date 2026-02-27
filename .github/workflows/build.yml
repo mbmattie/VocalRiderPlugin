@@ -74,6 +74,102 @@ jobs:
         codesign -dv --verbose=4 build/VocalRider_artefacts/Release/AU/magic.RIDE.component
         codesign -dv --verbose=4 build/VocalRider_artefacts/Release/VST3/magic.RIDE.vst3
     
+    - name: Download Eden SDK (macOS)
+      env:
+        GH_TOKEN: ${{ secrets.BUILD_TOOLS_TOKEN }}
+      run: |
+        gh release download eden-sdk-mac-v5.10.4 \
+          --repo mbmattie/build-tools \
+          --pattern "*.dmg" \
+          --dir $RUNNER_TEMP/eden
+      continue-on-error: true
+    
+    - name: Install Eden SDK & iLok License Manager (macOS)
+      run: |
+        # Install iLok License Manager
+        curl -o $RUNNER_TEMP/LicenseSupportInstallerMac.zip \
+          https://installers.ilok.com/iloklicensemanager/LicenseSupportInstallerMac.zip
+        unzip $RUNNER_TEMP/LicenseSupportInstallerMac.zip -d $RUNNER_TEMP/ilok
+        hdiutil attach $RUNNER_TEMP/ilok/LicenseSupportInstallerMac*.dmg
+        ilokVol=$(ls /Volumes | grep "License")
+        sudo installer -pkg "/Volumes/$ilokVol/License Support.pkg" -target LocalSystem
+        hdiutil detach "/Volumes/$ilokVol" || true
+        
+        # Install Eden SDK
+        DMG_FILE=$(ls $RUNNER_TEMP/eden/*.dmg 2>/dev/null | head -1)
+        if [ -n "$DMG_FILE" ]; then
+          echo "Installing Eden SDK from $DMG_FILE"
+          hdiutil attach "$DMG_FILE"
+          edenVol=$(ls /Volumes | grep -i eden | head -1)
+          if [ -n "$edenVol" ]; then
+            PKG_FILE=$(find "/Volumes/$edenVol" -name "*.pkg" -maxdepth 1 | head -1)
+            if [ -n "$PKG_FILE" ]; then
+              sudo installer -pkg "$PKG_FILE" -target LocalSystem
+              echo "Eden SDK installed."
+            else
+              echo "No .pkg found in DMG. Listing contents:"
+              ls "/Volumes/$edenVol"
+            fi
+            hdiutil detach "/Volumes/$edenVol" || true
+          fi
+        else
+          echo "Eden SDK DMG not found. AAX signing will be skipped."
+        fi
+      continue-on-error: true
+    
+    - name: Sign macOS AAX (PACE Cloud Signing)
+      env:
+        ILOK_USERNAME: ${{ secrets.ILOK_USERNAME }}
+        ILOK_PASSWORD: ${{ secrets.ILOK_PASSWORD }}
+        PACE_CUSTOMER_NUMBER: ${{ secrets.PACE_CUSTOMER_NUMBER }}
+        TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      run: |
+        WRAPTOOL="/Applications/PACEAntiPiracy/Eden/Fusion/Versions/5/bin/wraptool"
+        AAX_IN="build/VocalRider_artefacts/Release/AAX/magic.RIDE.aaxplugin"
+        AAX_OUT="build/VocalRider_artefacts/Release/AAX/magic.RIDE_signed.aaxplugin"
+        
+        if [ ! -f "$WRAPTOOL" ]; then
+          echo "wraptool not found. Skipping AAX signing."
+          exit 0
+        fi
+        
+        if [ -z "$ILOK_USERNAME" ] || [ -z "$ILOK_PASSWORD" ]; then
+          echo "iLok credentials not configured. Skipping AAX signing."
+          exit 0
+        fi
+        
+        echo "Opening iLok cloud session..."
+        iloktool cloud --open --account "$ILOK_USERNAME" --password "$ILOK_PASSWORD" -v || {
+          echo "WARNING: Failed to open iLok cloud session. Skipping AAX signing."
+          exit 0
+        }
+        
+        echo "Signing AAX plugin..."
+        $WRAPTOOL sign --verbose \
+          --account "$ILOK_USERNAME" \
+          --signid "Developer ID Application: MATTHEW STEVEN ERNST ($TEAM_ID)" \
+          --customernumber "$PACE_CUSTOMER_NUMBER" \
+          --customername "MBM Audio" \
+          --productname "magic.RIDE" \
+          --allowsigningservice \
+          --dsig1-compat off \
+          --in "$AAX_IN" \
+          --out "$AAX_OUT"
+        
+        if [ $? -eq 0 ]; then
+          $WRAPTOOL verify --verbose --in "$AAX_OUT"
+          rm -rf "$AAX_IN"
+          ditto "$AAX_OUT" "$AAX_IN"
+          rm -rf "$AAX_OUT"
+          echo "AAX plugin signed successfully!"
+        else
+          echo "WARNING: AAX signing failed."
+        fi
+        
+        echo "Closing iLok cloud session..."
+        iloktool cloud --close -v || true
+      continue-on-error: true
+    
     - name: Build Installer
       run: |
         cd installer
@@ -124,10 +220,10 @@ jobs:
         name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-macOS-VST3
         path: build/VocalRider_artefacts/Release/VST3/*.vst3
     
-    - name: Upload macOS AAX (Unsigned - sign locally with iLok)
+    - name: Upload macOS AAX
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-macOS-AAX-unsigned
+        name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-macOS-AAX
         path: build/VocalRider_artefacts/Release/AAX/*.aaxplugin
     
     - name: Cleanup Keychain
