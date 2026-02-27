@@ -100,6 +100,61 @@ target_link_libraries(VocalRider
 )
 
 # ============================================================================
+# magic.RIDE Lite — free version with limited controls
+# ============================================================================
+juce_add_plugin(VocalRiderLite
+    COMPANY_NAME "MBM Audio"
+    BUNDLE_ID "com.mbmaudio.vocalriderlite"
+    PLUGIN_MANUFACTURER_CODE Mbma
+    PLUGIN_CODE Vrlt
+
+    FORMATS AU VST3 Standalone
+
+    PRODUCT_NAME "magic.RIDE Lite"
+
+    IS_SYNTH FALSE
+    NEEDS_MIDI_INPUT FALSE
+    NEEDS_MIDI_OUTPUT FALSE
+    IS_MIDI_EFFECT FALSE
+    EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+
+    VST3_CATEGORIES Dynamics
+    AU_MAIN_TYPE kAudioUnitType_Effect
+
+    COPY_PLUGIN_AFTER_BUILD FALSE
+)
+
+target_sources(VocalRiderLite PRIVATE ${PLUGIN_SOURCES})
+
+target_include_directories(VocalRiderLite PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/DSP
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI
+)
+
+target_compile_definitions(VocalRiderLite
+    PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0
+        MAGICRIDE_LITE=1
+)
+
+target_link_libraries(VocalRiderLite
+    PRIVATE
+        juce::juce_audio_utils
+        juce::juce_audio_processors
+        juce::juce_gui_basics
+        juce::juce_gui_extra
+        juce::juce_dsp
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lto_flags
+        juce::juce_recommended_warning_flags
+)
+
+# ============================================================================
 # Auto-install plugins to system folders after build (macOS only)
 # ============================================================================
 if(APPLE)

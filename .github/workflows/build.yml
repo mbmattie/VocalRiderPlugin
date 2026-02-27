@@ -293,39 +293,65 @@ jobs:
         }
         
         $installer = Get-ChildItem -Path "$env:RUNNER_TEMP\eden" -Filter "*.exe" | Select-Object -First 1
-        if ($installer) {
-          Write-Host "Installing Eden SDK: $($installer.FullName)"
-          Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait -NoNewWindow
-          Start-Sleep -Seconds 10
-          Write-Host "Eden SDK install process completed."
-          
-          Write-Host "=== Searching for PACE tools ==="
-          Write-Host "Checking known PACE locations..."
-          $searchPaths = @(
-            "C:\Program Files\PACE Anti-Piracy",
-            "C:\Program Files (x86)\PACE Anti-Piracy",
-            "C:\Program Files\PACEAntiPiracy",
-            "C:\Program Files (x86)\PACEAntiPiracy",
-            "C:\Program Files\Common Files\PACE Anti-Piracy",
-            "C:\Program Files\Common Files\Avid"
-          )
-          foreach ($p in $searchPaths) {
-            if (Test-Path $p) {
-              Write-Host "Found directory: $p"
-              Get-ChildItem -Path $p -Recurse -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
-            }
-          }
-          
-          Write-Host "=== Broad search for wraptool.exe ==="
-          $wraptool = Get-ChildItem -Path "C:\" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          $iloktool = Get-ChildItem -Path "C:\" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($wraptool) { Write-Host "Found wraptool: $($wraptool.FullName)" }
-          else { Write-Host "WARNING: wraptool not found anywhere on C:\" }
-          if ($iloktool) { Write-Host "Found iloktool: $($iloktool.FullName)" }
-          else { Write-Host "WARNING: iloktool not found anywhere on C:\" }
-        } else {
+        if (-not $installer) {
           Write-Host "Eden SDK installer not found. AAX signing will be skipped."
+          exit 0
         }
+        
+        Write-Host "Installer: $($installer.FullName)"
+        Write-Host "Installer size: $([math]::Round($installer.Length / 1MB, 1)) MB"
+        
+        # Check installer type by examining PE headers
+        Write-Host "=== Attempting install with /VERYSILENT (Inno Setup) ==="
+        $proc = Start-Process -FilePath $installer.FullName `
+          -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-" `
+          -Wait -NoNewWindow -PassThru
+        Write-Host "Exit code: $($proc.ExitCode)"
+        Start-Sleep -Seconds 5
+        
+        # Check if that worked
+        $wraptool = Get-ChildItem -Path "C:\","D:\" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        
+        if (-not $wraptool) {
+          Write-Host "Inno Setup flags didn't work. Trying /S (NSIS)..."
+          $proc = Start-Process -FilePath $installer.FullName `
+            -ArgumentList "/S" -Wait -NoNewWindow -PassThru
+          Write-Host "Exit code: $($proc.ExitCode)"
+          Start-Sleep -Seconds 5
+          $wraptool = Get-ChildItem -Path "C:\","D:\" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
+        
+        if (-not $wraptool) {
+          Write-Host "NSIS flags didn't work. Trying InstallShield /s /v`"/qn`"..."
+          $proc = Start-Process -FilePath $installer.FullName `
+            -ArgumentList '/s','/v"/qn"' -Wait -NoNewWindow -PassThru
+          Write-Host "Exit code: $($proc.ExitCode)"
+          Start-Sleep -Seconds 5
+          $wraptool = Get-ChildItem -Path "C:\","D:\" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
+        
+        Write-Host "=== Post-install search results ==="
+        # Check PACE directories on both drives
+        $paceDirs = @(
+          "C:\Program Files\PACE Anti-Piracy",
+          "C:\Program Files (x86)\PACE Anti-Piracy",
+          "C:\Program Files\PACEAntiPiracy",
+          "C:\Program Files (x86)\PACEAntiPiracy",
+          "D:\Program Files\PACE Anti-Piracy",
+          "D:\Program Files\PACEAntiPiracy"
+        )
+        foreach ($p in $paceDirs) {
+          if (Test-Path $p) {
+            Write-Host "Found: $p"
+            Get-ChildItem -Path $p -Recurse -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
+          }
+        }
+        
+        $iloktool = Get-ChildItem -Path "C:\","D:\" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($wraptool) { Write-Host "FOUND wraptool: $($wraptool.FullName)" }
+        else { Write-Host "ERROR: wraptool not found on any drive." }
+        if ($iloktool) { Write-Host "FOUND iloktool: $($iloktool.FullName)" }
+        else { Write-Host "WARNING: iloktool not found on any drive." }
       shell: pwsh
       continue-on-error: true
     
