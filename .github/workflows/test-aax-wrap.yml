@@ -104,6 +104,14 @@ jobs:
         if (-not $WRAPTOOL) { Write-Error "wraptool.exe not found after install"; exit 1 }
         if (-not $ILOKTOOL) { Write-Error "iloktool.exe not found after install"; exit 1 }
 
+        # Installer sets PACE_FUSION_HOME in registry; refresh it for this session
+        $fusionHome = [System.Environment]::GetEnvironmentVariable("PACE_FUSION_HOME", "Machine")
+        if (-not $fusionHome) {
+          $fusionHome = Split-Path $WRAPTOOL -Parent
+        }
+        $env:PACE_FUSION_HOME = $fusionHome
+        Write-Host "PACE_FUSION_HOME: $fusionHome"
+
         $AAX_IN = (Get-ChildItem "aax-input" -Filter "*.aaxplugin" -Recurse -Directory | Select-Object -First 1).FullName
         $AAX_OUT = "$env:RUNNER_TEMP\magic.RIDE.aaxplugin"
 

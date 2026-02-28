@@ -398,6 +398,10 @@ jobs:
         if (-not $WRAPTOOL) { Write-Error "wraptool.exe not found"; exit 1 }
         if (-not $ILOKTOOL) { Write-Error "iloktool.exe not found"; exit 1 }
 
+        $fusionHome = [System.Environment]::GetEnvironmentVariable("PACE_FUSION_HOME", "Machine")
+        if (-not $fusionHome) { $fusionHome = Split-Path $WRAPTOOL -Parent }
+        $env:PACE_FUSION_HOME = $fusionHome
+
         & $ILOKTOOL cloud --open --account $env:ILOK_USERNAME --password $env:ILOK_PASSWORD -v
 
         $AAX_DIR = "build\VocalRider_artefacts\Release\AAX"
