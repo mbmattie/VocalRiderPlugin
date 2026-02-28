@@ -7,111 +7,107 @@ jobs:
   extract:
     runs-on: windows-latest
     steps:
-    - name: Download Eden SDK (ZIP version)
+    - name: Download Eden SDK
       env:
         GH_TOKEN: ${{ secrets.BUILD_TOOLS_TOKEN }}
       run: |
-        Write-Host "Downloading Eden SDK ZIP..."
         New-Item -ItemType Directory -Path "$env:RUNNER_TEMP\eden" -Force | Out-Null
 
-        # Try ZIP version first, fall back to EXE
+        # Try ZIP first (contains .iss response file), fall back to EXE
         $downloaded = $false
         try {
-          gh release download eden-sdk-v5.10.4 `
-            --repo mbmattie/build-tools `
-            --pattern "*.zip" `
-            --dir "$env:RUNNER_TEMP\eden"
+          gh release download eden-sdk-v5.10.4 --repo mbmattie/build-tools --pattern "*.zip" --dir "$env:RUNNER_TEMP\eden"
           $downloaded = (Get-ChildItem "$env:RUNNER_TEMP\eden" -Filter "*.zip" | Measure-Object).Count -gt 0
         } catch {}
 
         if (-not $downloaded) {
-          Write-Host "No ZIP found, downloading EXE..."
-          gh release download eden-sdk-v5.10.4 `
-            --repo mbmattie/build-tools `
-            --pattern "*.exe" `
-            --dir "$env:RUNNER_TEMP\eden"
+          gh release download eden-sdk-v5.10.4 --repo mbmattie/build-tools --pattern "*.exe" --dir "$env:RUNNER_TEMP\eden"
         }
 
-        Get-ChildItem "$env:RUNNER_TEMP\eden" | ForEach-Object {
-          Write-Host "Downloaded: $($_.Name) ($([math]::Round($_.Length/1MB))MB)"
+        # If ZIP, extract it
+        $zip = Get-ChildItem "$env:RUNNER_TEMP\eden" -Filter "*.zip" | Select-Object -First 1
+        if ($zip) {
+          Expand-Archive -Path $zip.FullName -DestinationPath "$env:RUNNER_TEMP\eden\extracted" -Force
+        }
+
+        Get-ChildItem "$env:RUNNER_TEMP\eden" -Recurse -Depth 2 | ForEach-Object {
+          Write-Host "  $($_.FullName) ($([math]::Round($_.Length/1KB))KB)"
         }
       shell: pwsh
 
-    - name: Extract and install Eden SDK
+    - name: Install Eden SDK (PACE recommended method)
       run: |
-        $edenDir = "$env:RUNNER_TEMP\eden"
-        $extractDir = "$env:RUNNER_TEMP\eden-install"
+        # Find installer exe
+        $installer = Get-ChildItem "$env:RUNNER_TEMP\eden" -Filter "Eden*.exe" -Recurse | Select-Object -First 1
+        if (-not $installer) {
+          Write-Host "ERROR: No installer found"
+          exit 1
+        }
+        Write-Host "Installer: $($installer.FullName)"
 
-        # If ZIP, extract it first
-        $zip = Get-ChildItem $edenDir -Filter "*.zip" | Select-Object -First 1
-        if ($zip) {
-          Write-Host "Extracting ZIP: $($zip.Name)"
-          Expand-Archive -Path $zip.FullName -DestinationPath $extractDir -Force
-          Get-ChildItem $extractDir -Recurse -Depth 2 | ForEach-Object {
+        # Find .iss response file
+        $issFile = Get-ChildItem $installer.Directory -Filter "*.iss" | Where-Object { $_.Name -notlike "*Uninstall*" } | Select-Object -First 1
+
+        # PACE docs: silent install hangs at the end (known issue, fix expected in Fusion 6.0)
+        # The install is complete by the time it hangs. Use Start-Process + sleep + kill.
+        $args = @('/S', '/v"/qn /L*V c:\msi_log.txt"')
+        if ($issFile) {
+          $args += "/f1`"$($issFile.FullName)`""
+          Write-Host "Using response file: $($issFile.FullName)"
+        }
+
+        Write-Host "Starting installer with args: $args"
+        $proc = Start-Process -FilePath $installer.FullName -ArgumentList $args -PassThru
+
+        Write-Host "Waiting 90 seconds for install to complete..."
+        Start-Sleep -Seconds 90
+
+        if (-not $proc.HasExited) {
+          Write-Host "Installer still running (expected - known PACE issue). Killing process."
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 5
+        } else {
+          Write-Host "Installer exited with code: $($proc.ExitCode)"
+        }
+
+        # Check MSI log for any useful info
+        if (Test-Path "c:\msi_log.txt") {
+          Write-Host "=== MSI Log (last 30 lines) ==="
+          Get-Content "c:\msi_log.txt" -Tail 30
+        }
+      shell: pwsh
+
+    - name: Verify installation
+      run: |
+        $toolsDir = "C:\Program Files (x86)\PACEAntiPiracy\Eden\Fusion\Versions\5"
+
+        Write-Host "=== Checking expected install path ==="
+        if (Test-Path $toolsDir) {
+          Write-Host "FOUND: $toolsDir"
+          Get-ChildItem $toolsDir -Recurse | ForEach-Object {
+            Write-Host "  $($_.FullName) ($([math]::Round($_.Length/1KB))KB)"
+          }
+        } else {
+          Write-Host "Expected path not found. Searching..."
+          Get-ChildItem "C:\Program Files (x86)\PACEAntiPiracy" -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "  $($_.FullName)"
+          }
+          Get-ChildItem "C:\Program Files\PACEAntiPiracy" -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
             Write-Host "  $($_.FullName)"
           }
         }
 
-        # Find the installer EXE (either from ZIP or direct download)
-        $installer = Get-ChildItem $extractDir -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $installer) {
-          $installer = Get-ChildItem $edenDir -Filter "*.exe" | Select-Object -First 1
-        }
+        Write-Host "=== Searching for wraptool.exe ==="
+        $wraptool = Get-ChildItem "C:\Program Files (x86)","C:\Program Files" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue
+        foreach ($w in $wraptool) { Write-Host "FOUND: $($w.FullName)" }
 
-        if (-not $installer) {
-          Write-Host "ERROR: No installer found."
-          exit 1
-        }
+        Write-Host "=== Searching for iloktool.exe ==="
+        $iloktool = Get-ChildItem "C:\Program Files (x86)","C:\Program Files" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue
+        foreach ($i in $iloktool) { Write-Host "FOUND: $($i.FullName)" }
 
-        Write-Host "Running installer: $($installer.FullName)"
-
-        # Find .iss response file if available
-        $issFile = Get-ChildItem $installer.Directory -Filter "*.iss" -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike "*Uninstall*" } | Select-Object -First 1
-
-        if ($issFile) {
-          Write-Host "Using response file: $($issFile.FullName)"
-          $proc = Start-Process -FilePath $installer.FullName -ArgumentList "/s","/f1`"$($issFile.FullName)`"" -Wait -PassThru
-        } else {
-          Write-Host "No response file, trying silent install..."
-          $proc = Start-Process -FilePath $installer.FullName -ArgumentList "/s",'/v"/qn ALLUSERS=1 REBOOT=ReallySuppress"' -Wait -PassThru
-        }
-
-        Write-Host "Installer exit code: $($proc.ExitCode)"
-        Start-Sleep -Seconds 10
-      shell: pwsh
-      continue-on-error: true
-
-    - name: Search for PACE tools
-      run: |
-        Write-Host "=== Searching Program Files ==="
-        $wraptool = Get-ChildItem "C:\Program Files","C:\Program Files (x86)" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue
-        $iloktool = Get-ChildItem "C:\Program Files","C:\Program Files (x86)" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue
-
-        foreach ($w in $wraptool) { Write-Host "FOUND wraptool: $($w.FullName)" }
-        foreach ($i in $iloktool) { Write-Host "FOUND iloktool: $($i.FullName)" }
-
-        if (-not $wraptool) {
-          Write-Host "Not in Program Files, searching PACE paths..."
-          $searchPaths = @(
-            "C:\PACEAntiPiracy",
-            "C:\Program Files\PACE Anti-Piracy",
-            "C:\Program Files (x86)\PACE Anti-Piracy",
-            "C:\Program Files\Common Files\PACE",
-            "$env:RUNNER_TEMP"
-          )
-          foreach ($sp in $searchPaths) {
-            if (Test-Path $sp) {
-              Write-Host "Contents of ${sp}:"
-              Get-ChildItem $sp -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-                Write-Host "  $($_.FullName) ($($_.Length))"
-              }
-            }
-          }
-
-          Write-Host "=== Broad search for wraptool ==="
-          Get-ChildItem "C:\" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue -Depth 10 | ForEach-Object {
-            Write-Host "FOUND: $($_.FullName)"
-          }
+        Write-Host "=== Testing wraptool ==="
+        if ($wraptool) {
+          & $wraptool[0].FullName help 2>&1
         }
       shell: pwsh
 
@@ -120,21 +116,22 @@ jobs:
         $outDir = "$env:RUNNER_TEMP\pace-tools"
         New-Item -ItemType Directory -Path $outDir -Force | Out-Null
 
-        $allTools = @()
-        $allTools += Get-ChildItem "C:\Program Files","C:\Program Files (x86)","C:\" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue -Depth 10
-        $allTools += Get-ChildItem "C:\Program Files","C:\Program Files (x86)","C:\" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue -Depth 10
+        # Collect from known install path and search
+        $tools = @()
+        $tools += Get-ChildItem "C:\Program Files (x86)","C:\Program Files" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue
+        $tools += Get-ChildItem "C:\Program Files (x86)","C:\Program Files" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue
 
-        if ($allTools.Count -eq 0) {
-          Write-Host "WARNING: No PACE tools found. Creating empty marker file."
-          "No tools found" | Out-File "$outDir\NOT_FOUND.txt"
-        }
-
-        foreach ($tool in ($allTools | Sort-Object FullName -Unique)) {
+        foreach ($tool in ($tools | Sort-Object FullName -Unique)) {
           Write-Host "Packaging: $($tool.FullName)"
           Copy-Item $tool.FullName "$outDir\" -Force
+          # Copy companion DLLs
           Get-ChildItem $tool.Directory -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
             Copy-Item $_.FullName "$outDir\" -Force
-            Write-Host "  + DLL: $($_.Name)"
+            Write-Host "  + $($_.Name)"
+          }
+          # Copy the entire bin directory contents for completeness
+          Get-ChildItem $tool.Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName "$outDir\" -Force -ErrorAction SilentlyContinue
           }
         }
 
