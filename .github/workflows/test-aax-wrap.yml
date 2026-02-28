@@ -65,7 +65,8 @@ jobs:
           --pattern "EdenSDKLiteInstallerWin64.zip" `
           --dir $sdkDir
 
-        Expand-Archive -Path "$sdkDir\EdenSDKLiteInstallerWin64.zip" -DestinationPath "$sdkDir\extracted" -Force
+        # 7-Zip is much faster than Expand-Archive for large files
+        & 7z x "$sdkDir\EdenSDKLiteInstallerWin64.zip" -o"$sdkDir\extracted" -y
 
         $installer = Get-ChildItem "$sdkDir" -Filter "Eden*.exe" -Recurse | Select-Object -First 1
         $issFile = Get-ChildItem $installer.Directory -Filter "*.iss" | Where-Object { $_.Name -notlike "*Uninstall*" } | Select-Object -First 1
@@ -77,11 +78,10 @@ jobs:
         if ($issFile) { $installArgs += "/f1`"$($issFile.FullName)`"" }
 
         $proc = Start-Process -FilePath $installer.FullName -ArgumentList $installArgs -PassThru
-        Write-Host "Waiting 90s for install (known PACE hang at end)..."
+        Write-Host "Waiting 90s for install..."
         Start-Sleep -Seconds 90
 
         if (-not $proc.HasExited) {
-          Write-Host "Killing hung installer (expected)"
           Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
           Start-Sleep -Seconds 5
         }
@@ -91,57 +91,43 @@ jobs:
         foreach ($t in $wraptool) { Write-Host "Found: $($t.FullName)" }
         foreach ($t in $iloktool) { Write-Host "Found: $($t.FullName)" }
 
-    - name: Create temporary code signing certificate
-      shell: pwsh
-      run: |
-        $pfxPath = "$env:RUNNER_TEMP\test-codesign.pfx"
-        $pfxPass = "TempPass123!"
-
-        $cert = New-SelfSignedCertificate `
-          -Type CodeSigningCert `
-          -Subject "CN=MBM Audio Test, O=MBM Audio, L=Test, S=Test, C=US" `
-          -KeyAlgorithm RSA `
-          -KeyLength 2048 `
-          -HashAlgorithm SHA256 `
-          -CertStoreLocation Cert:\CurrentUser\My `
-          -NotAfter (Get-Date).AddDays(1)
-
-        $securePass = ConvertTo-SecureString -String $pfxPass -Force -AsPlainText
-        Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $securePass | Out-Null
-
-        Write-Host "Self-signed cert created: $pfxPath"
-        Write-Host "Thumbprint: $($cert.Thumbprint)"
-        Write-Host "Subject: $($cert.Subject)"
-
-        "PFX_PATH=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append
-        "PFX_PASS=$pfxPass" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-    - name: Wrap Windows AAX
+    - name: Create self-signed code signing cert & wrap AAX
       env:
         ILOK_USERNAME: ${{ secrets.ILOK_USERNAME }}
         ILOK_PASSWORD: ${{ secrets.ILOK_PASSWORD }}
         PACE_CUSTOMER_NUMBER: ${{ secrets.PACE_CUSTOMER_NUMBER }}
       shell: pwsh
       run: |
+        # Create self-signed code signing cert in the cert store
+        $cert = New-SelfSignedCertificate `
+          -Type CodeSigningCert `
+          -Subject "CN=MBM Audio Test, O=MBM Audio" `
+          -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 `
+          -CertStoreLocation Cert:\CurrentUser\My `
+          -NotAfter (Get-Date).AddDays(1)
+        $thumbprint = $cert.Thumbprint
+        Write-Host "Self-signed cert thumbprint: $thumbprint"
+
+        # Find tools
         $WRAPTOOL = (Get-ChildItem "C:\Program Files (x86)","C:\Program Files" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
         $ILOKTOOL = (Get-ChildItem "C:\Program Files (x86)","C:\Program Files" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
 
-        if (-not $WRAPTOOL) { Write-Error "wraptool.exe not found after install"; exit 1 }
-        if (-not $ILOKTOOL) { Write-Error "iloktool.exe not found after install"; exit 1 }
+        if (-not $WRAPTOOL) { Write-Error "wraptool.exe not found"; exit 1 }
+        if (-not $ILOKTOOL) { Write-Error "iloktool.exe not found"; exit 1 }
 
         $fusionHome = [System.Environment]::GetEnvironmentVariable("PACE_FUSION_HOME", "Machine")
         if (-not $fusionHome) { $fusionHome = Split-Path $WRAPTOOL -Parent }
         $env:PACE_FUSION_HOME = $fusionHome
-        Write-Host "PACE_FUSION_HOME: $fusionHome"
 
         $AAX_IN = (Get-ChildItem "aax-input" -Filter "*.aaxplugin" -Recurse -Directory | Select-Object -First 1).FullName
         $AAX_OUT = "$env:RUNNER_TEMP\magic.RIDE.aaxplugin"
 
+        Write-Host "PACE_FUSION_HOME: $fusionHome"
         Write-Host "wraptool: $WRAPTOOL"
         Write-Host "iloktool: $ILOKTOOL"
         Write-Host "Input:    $AAX_IN"
         Write-Host "Output:   $AAX_OUT"
-        Write-Host "Keyfile:  $env:PFX_PATH (self-signed test cert)"
+        Write-Host "SignId:   $thumbprint (self-signed test cert)"
 
         Write-Host "`n=== Opening iLok Cloud session ==="
         & $ILOKTOOL cloud --open --account $env:ILOK_USERNAME --password $env:ILOK_PASSWORD -v
@@ -153,8 +139,8 @@ jobs:
           --customername "MBM Audio" `
           --productname "magic.RIDE" `
           --allowsigningservice `
-          --keyfile $env:PFX_PATH `
-          --keypassword $env:PFX_PASS `
+          --signid $thumbprint `
+          --extrasigningoptions "/fd sha256" `
           --in $AAX_IN `
           --out $AAX_OUT
 
@@ -164,7 +150,7 @@ jobs:
         & $WRAPTOOL verify --verbose --in $AAX_OUT
 
         & $ILOKTOOL cloud --close -v
-        Write-Host "`nWindows AAX successfully wrapped and verified (self-signed test cert)"
+        Write-Host "`nWindows AAX wrapped successfully (self-signed test cert)"
 
     - name: Upload wrapped Windows AAX
       uses: actions/upload-artifact@v4
