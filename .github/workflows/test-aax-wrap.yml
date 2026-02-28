@@ -157,28 +157,27 @@ jobs:
         & $ILOKTOOL cloud --open --account $env:ILOK_USERNAME --password $env:ILOK_PASSWORD -v
 
         # --- Run wraptool with --keyfile (PFX) instead of --signid (thumbprint) ---
-        # Also pass extra signtool options for explicit timestamp + no revocation check
         Write-Host "`n=== Running wraptool ==="
         $extraOpts = "/tr http://timestamp.digicert.com /td sha256 /v"
-        Write-Host "Extra signing options: $extraOpts"
 
-        $wrapArgs = @(
-          "sign", "--verbose",
-          "--account", $env:ILOK_USERNAME,
-          "--customernumber", $env:PACE_CUSTOMER_NUMBER,
-          "--customername", "MBM Audio",
-          "--productname", "magic.RIDE",
-          "--allowsigningservice",
-          "--keyfile", $pfxPath,
-          "--keypassword", $pfxPass,
-          "--extrasigningoptions", $extraOpts,
-          "--in", $AAX_IN,
-          "--out", $AAX_OUT
-        )
-        Write-Host "wraptool args: $($wrapArgs -join ' ')"
+        # Build as single string with explicit quotes around every value
+        # (Start-Process -ArgumentList with an array strips inner quotes)
+        $wrapCmd = "sign --verbose" + `
+          " --account `"$($env:ILOK_USERNAME)`"" + `
+          " --customernumber `"$($env:PACE_CUSTOMER_NUMBER)`"" + `
+          " --customername `"MBM Audio`"" + `
+          " --productname `"magic.RIDE`"" + `
+          " --allowsigningservice" + `
+          " --keyfile `"$pfxPath`"" + `
+          " --keypassword `"$pfxPass`"" + `
+          " --extrasigningoptions `"$extraOpts`"" + `
+          " --in `"$AAX_IN`"" + `
+          " --out `"$AAX_OUT`""
+
+        Write-Host "wraptool command: $wrapCmd"
 
         $proc = Start-Process -FilePath $WRAPTOOL `
-          -ArgumentList ($wrapArgs -join ' ') `
+          -ArgumentList $wrapCmd `
           -PassThru -NoNewWindow `
           -RedirectStandardOutput "$env:RUNNER_TEMP\wrap_stdout.txt" `
           -RedirectStandardError "$env:RUNNER_TEMP\wrap_stderr.txt"
