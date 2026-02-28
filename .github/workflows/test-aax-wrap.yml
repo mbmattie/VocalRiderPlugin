@@ -91,6 +91,31 @@ jobs:
         foreach ($t in $wraptool) { Write-Host "Found: $($t.FullName)" }
         foreach ($t in $iloktool) { Write-Host "Found: $($t.FullName)" }
 
+    - name: Create temporary code signing certificate
+      shell: pwsh
+      run: |
+        $pfxPath = "$env:RUNNER_TEMP\test-codesign.pfx"
+        $pfxPass = "TempPass123!"
+
+        $cert = New-SelfSignedCertificate `
+          -Type CodeSigningCert `
+          -Subject "CN=MBM Audio Test, O=MBM Audio, L=Test, S=Test, C=US" `
+          -KeyAlgorithm RSA `
+          -KeyLength 2048 `
+          -HashAlgorithm SHA256 `
+          -CertStoreLocation Cert:\CurrentUser\My `
+          -NotAfter (Get-Date).AddDays(1)
+
+        $securePass = ConvertTo-SecureString -String $pfxPass -Force -AsPlainText
+        Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $securePass | Out-Null
+
+        Write-Host "Self-signed cert created: $pfxPath"
+        Write-Host "Thumbprint: $($cert.Thumbprint)"
+        Write-Host "Subject: $($cert.Subject)"
+
+        "PFX_PATH=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+        "PFX_PASS=$pfxPass" | Out-File -FilePath $env:GITHUB_ENV -Append
+
     - name: Wrap Windows AAX
       env:
         ILOK_USERNAME: ${{ secrets.ILOK_USERNAME }}
@@ -104,11 +129,8 @@ jobs:
         if (-not $WRAPTOOL) { Write-Error "wraptool.exe not found after install"; exit 1 }
         if (-not $ILOKTOOL) { Write-Error "iloktool.exe not found after install"; exit 1 }
 
-        # Installer sets PACE_FUSION_HOME in registry; refresh it for this session
         $fusionHome = [System.Environment]::GetEnvironmentVariable("PACE_FUSION_HOME", "Machine")
-        if (-not $fusionHome) {
-          $fusionHome = Split-Path $WRAPTOOL -Parent
-        }
+        if (-not $fusionHome) { $fusionHome = Split-Path $WRAPTOOL -Parent }
         $env:PACE_FUSION_HOME = $fusionHome
         Write-Host "PACE_FUSION_HOME: $fusionHome"
 
@@ -119,6 +141,7 @@ jobs:
         Write-Host "iloktool: $ILOKTOOL"
         Write-Host "Input:    $AAX_IN"
         Write-Host "Output:   $AAX_OUT"
+        Write-Host "Keyfile:  $env:PFX_PATH (self-signed test cert)"
 
         Write-Host "`n=== Opening iLok Cloud session ==="
         & $ILOKTOOL cloud --open --account $env:ILOK_USERNAME --password $env:ILOK_PASSWORD -v
@@ -130,6 +153,8 @@ jobs:
           --customername "MBM Audio" `
           --productname "magic.RIDE" `
           --allowsigningservice `
+          --keyfile $env:PFX_PATH `
+          --keypassword $env:PFX_PASS `
           --in $AAX_IN `
           --out $AAX_OUT
 
@@ -139,7 +164,7 @@ jobs:
         & $WRAPTOOL verify --verbose --in $AAX_OUT
 
         & $ILOKTOOL cloud --close -v
-        Write-Host "`nWindows AAX successfully wrapped and verified"
+        Write-Host "`nWindows AAX successfully wrapped and verified (self-signed test cert)"
 
     - name: Upload wrapped Windows AAX
       uses: actions/upload-artifact@v4
