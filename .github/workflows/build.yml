@@ -351,20 +351,38 @@ jobs:
       env:
         CRED: ${{ secrets.ILOK_USERNAME }}
 
-    - name: Download PACE tools
+    - name: Install Eden SDK
       if: steps.pace-check.outputs.available == 'true'
       env:
         GH_TOKEN: ${{ secrets.BUILD_TOOLS_TOKEN }}
       shell: pwsh
       run: |
-        $toolsDir = "$env:RUNNER_TEMP\pace-tools"
-        New-Item -ItemType Directory -Path $toolsDir -Force | Out-Null
+        $sdkDir = "$env:RUNNER_TEMP\eden"
+        New-Item -ItemType Directory -Path $sdkDir -Force | Out-Null
+
         gh release download eden-sdk-v5.10.4 `
           --repo mbmattie/build-tools `
-          --pattern "pace-tools-win64.zip" `
-          --dir $toolsDir
-        Expand-Archive -Path "$toolsDir\pace-tools-win64.zip" -DestinationPath $toolsDir -Force
-        Get-ChildItem $toolsDir -Filter "*.exe" | ForEach-Object { Write-Host "Found: $($_.Name)" }
+          --pattern "EdenSDKLiteInstallerWin64.zip" `
+          --dir $sdkDir
+
+        Expand-Archive -Path "$sdkDir\EdenSDKLiteInstallerWin64.zip" -DestinationPath "$sdkDir\extracted" -Force
+
+        $installer = Get-ChildItem "$sdkDir" -Filter "Eden*.exe" -Recurse | Select-Object -First 1
+        $issFile = Get-ChildItem $installer.Directory -Filter "*.iss" | Where-Object { $_.Name -notlike "*Uninstall*" } | Select-Object -First 1
+
+        $installArgs = @('/S', '/v"/qn"')
+        if ($issFile) { $installArgs += "/f1`"$($issFile.FullName)`"" }
+
+        $proc = Start-Process -FilePath $installer.FullName -ArgumentList $installArgs -PassThru
+        Start-Sleep -Seconds 90
+
+        if (-not $proc.HasExited) {
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 5
+        }
+
+        $wraptool = Get-ChildItem "C:\Program Files (x86)","C:\Program Files" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue
+        foreach ($t in $wraptool) { Write-Host "Found: $($t.FullName)" }
 
     - name: Wrap Windows AAX with PACE wraptool
       if: steps.pace-check.outputs.available == 'true'
@@ -374,12 +392,11 @@ jobs:
         PACE_CUSTOMER_NUMBER: ${{ secrets.PACE_CUSTOMER_NUMBER }}
       shell: pwsh
       run: |
-        $toolsDir = "$env:RUNNER_TEMP\pace-tools"
-        $WRAPTOOL = "$toolsDir\wraptool.exe"
-        $ILOKTOOL = "$toolsDir\iloktool.exe"
+        $WRAPTOOL = (Get-ChildItem "C:\Program Files (x86)","C:\Program Files" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+        $ILOKTOOL = (Get-ChildItem "C:\Program Files (x86)","C:\Program Files" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
 
-        if (-not (Test-Path $WRAPTOOL)) { Write-Error "wraptool.exe not found"; exit 1 }
-        if (-not (Test-Path $ILOKTOOL)) { Write-Error "iloktool.exe not found"; exit 1 }
+        if (-not $WRAPTOOL) { Write-Error "wraptool.exe not found"; exit 1 }
+        if (-not $ILOKTOOL) { Write-Error "iloktool.exe not found"; exit 1 }
 
         & $ILOKTOOL cloud --open --account $env:ILOK_USERNAME --password $env:ILOK_PASSWORD -v
 
@@ -393,7 +410,6 @@ jobs:
           --customername "MBM Audio" `
           --productname "magic.RIDE" `
           --allowsigningservice `
-          --dsig1-compat off `
           --in $AAX_IN `
           --out $AAX_OUT
 
