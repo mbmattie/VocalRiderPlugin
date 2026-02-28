@@ -1,0 +1,72 @@
+name: Extract PACE Tools
+
+on:
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: windows-latest
+    steps:
+    - name: Download Eden SDK
+      env:
+        GH_TOKEN: ${{ secrets.BUILD_TOOLS_TOKEN }}
+      run: |
+        gh release download eden-sdk-v5.10.4 `
+          --repo mbmattie/build-tools `
+          --pattern "*.exe" `
+          --dir "$env:RUNNER_TEMP\eden"
+      shell: pwsh
+
+    - name: Install Eden SDK
+      run: |
+        $installer = Get-ChildItem "$env:RUNNER_TEMP\eden" -Filter "*.exe" | Select-Object -First 1
+        Write-Host "Running installer: $($installer.FullName)"
+        Start-Process -FilePath $installer.FullName -ArgumentList "/S","/v/qn" -Wait -NoNewWindow
+        Write-Host "Installer finished."
+        Start-Sleep -Seconds 5
+      shell: pwsh
+
+    - name: Find and package PACE tools
+      run: |
+        Write-Host "Searching for wraptool and iloktool..."
+
+        $wraptool = Get-ChildItem "C:\Program Files","C:\Program Files (x86)" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue
+        $iloktool = Get-ChildItem "C:\Program Files","C:\Program Files (x86)" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue
+
+        if (-not $wraptool) {
+          Write-Host "wraptool not found in Program Files, searching entire C drive..."
+          $wraptool = Get-ChildItem "C:\" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue -Depth 8
+          $iloktool = Get-ChildItem "C:\" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue -Depth 8
+        }
+
+        $outDir = "$env:RUNNER_TEMP\pace-tools"
+        New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+
+        foreach ($tool in $wraptool) {
+          Write-Host "Found wraptool: $($tool.FullName)"
+          Copy-Item $tool.FullName "$outDir\"
+          # Copy any DLLs from the same directory
+          Get-ChildItem $tool.Directory -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName "$outDir\"
+            Write-Host "  Copied dependency: $($_.Name)"
+          }
+        }
+
+        foreach ($tool in $iloktool) {
+          Write-Host "Found iloktool: $($tool.FullName)"
+          Copy-Item $tool.FullName "$outDir\"
+          Get-ChildItem $tool.Directory -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName "$outDir\"
+            Write-Host "  Copied dependency: $($_.Name)"
+          }
+        }
+
+        Write-Host "=== Packaged tools ==="
+        Get-ChildItem $outDir | ForEach-Object { Write-Host "  $($_.Name) ($([math]::Round($_.Length/1KB))KB)" }
+      shell: pwsh
+
+    - name: Upload PACE tools
+      uses: actions/upload-artifact@v4
+      with:
+        name: pace-tools-win64
+        path: ${{ runner.temp }}/pace-tools/*
