@@ -97,16 +97,25 @@ jobs:
         ILOK_PASSWORD: ${{ secrets.ILOK_PASSWORD }}
         PACE_CUSTOMER_NUMBER: ${{ secrets.PACE_CUSTOMER_NUMBER }}
       shell: pwsh
+      timeout-minutes: 5
       run: |
-        # Create self-signed code signing cert in the cert store
+        # Force legacy CSP (CNG keys cause signtool to hang)
         $cert = New-SelfSignedCertificate `
           -Type CodeSigningCert `
           -Subject "CN=MBM Audio Test, O=MBM Audio" `
           -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 `
           -CertStoreLocation Cert:\CurrentUser\My `
+          -KeySpec Signature `
+          -Provider "Microsoft Enhanced RSA and AES Cryptographic Provider" `
           -NotAfter (Get-Date).AddDays(1)
         $thumbprint = $cert.Thumbprint
-        Write-Host "Self-signed cert thumbprint: $thumbprint"
+        Write-Host "Cert thumbprint: $thumbprint"
+        Write-Host "Cert provider: $((Get-Item Cert:\CurrentUser\My\$thumbprint).PrivateKey.CspKeyContainerInfo.ProviderName)"
+
+        # Also export to PFX as backup
+        $pfxPath = "$env:RUNNER_TEMP\test-codesign.pfx"
+        $securePass = ConvertTo-SecureString "TempPass!" -Force -AsPlainText
+        Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $securePass | Out-Null
 
         # Find tools
         $WRAPTOOL = (Get-ChildItem "C:\Program Files (x86)","C:\Program Files" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
@@ -124,10 +133,24 @@ jobs:
 
         Write-Host "PACE_FUSION_HOME: $fusionHome"
         Write-Host "wraptool: $WRAPTOOL"
-        Write-Host "iloktool: $ILOKTOOL"
         Write-Host "Input:    $AAX_IN"
         Write-Host "Output:   $AAX_OUT"
-        Write-Host "SignId:   $thumbprint (self-signed test cert)"
+
+        # First, verify signtool works independently
+        $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits" -Filter "signtool.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*x64*" } | Select-Object -Last 1
+        if ($signtool) {
+          Write-Host "`n=== Testing signtool directly ==="
+          Write-Host "signtool: $($signtool.FullName)"
+          $testDll = Get-ChildItem $AAX_IN -Filter "*.aaxplugin" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $testDll) { $testDll = Get-ChildItem $AAX_IN -Filter "*.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 }
+          if ($testDll) {
+            Write-Host "Test signing: $($testDll.FullName)"
+            & $signtool.FullName sign /sha1 $thumbprint /fd sha256 $testDll.FullName
+            Write-Host "signtool exit code: $LASTEXITCODE"
+          }
+        } else {
+          Write-Host "WARNING: signtool.exe not found on runner"
+        }
 
         Write-Host "`n=== Opening iLok Cloud session ==="
         & $ILOKTOOL cloud --open --account $env:ILOK_USERNAME --password $env:ILOK_PASSWORD -v
@@ -140,7 +163,7 @@ jobs:
           --productname "magic.RIDE" `
           --allowsigningservice `
           --signid $thumbprint `
-          --extrasigningoptions "/fd sha256" `
+          --extrasigningoptions "/fd sha256 /tr http://timestamp.digicert.com /td sha256" `
           --in $AAX_IN `
           --out $AAX_OUT
 
@@ -150,7 +173,7 @@ jobs:
         & $WRAPTOOL verify --verbose --in $AAX_OUT
 
         & $ILOKTOOL cloud --close -v
-        Write-Host "`nWindows AAX wrapped successfully (self-signed test cert)"
+        Write-Host "`nWindows AAX wrapped successfully"
 
     - name: Upload wrapped Windows AAX
       uses: actions/upload-artifact@v4
