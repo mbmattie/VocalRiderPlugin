@@ -163,7 +163,8 @@ jobs:
           --productname "magic.RIDE" `
           --allowsigningservice `
           --signid $thumbprint `
-          --extrasigningoptions "/fd sha256 /tr http://timestamp.digicert.com /td sha256" `
+          --timestampurl "http://timestamp.digicert.com" `
+          --extrasigningoptions "/fd sha256 /td sha256 /v" `
           --in $AAX_IN `
           --out $AAX_OUT
 
