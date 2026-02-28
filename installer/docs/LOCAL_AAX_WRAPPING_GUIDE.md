@@ -1,81 +1,91 @@
-# Local AAX Wrapping Guide
+# AAX Wrapping Guide
 
-AAX wrapping (PACE signing) is done locally instead of on CI runners. GitHub Actions builds the unsigned AAX artifacts for both macOS and Windows. You then download them, wrap them on your local machines, and include them in your final installers.
+AAX wrapping (PACE signing) is handled differently per platform:
 
----
+- **macOS AAX** — wrapped on CI *or* locally on your Mac (both use native `wraptool`)
+- **Windows AAX** — wrapped on CI only (the x86_64 PACE tools don't run on ARM VMs)
 
-## Overview
-
-```
-GitHub Actions (CI)          Local Machine
-┌─────────────────┐         ┌──────────────────────────┐
-│ Build macOS AAX  │───────▶│ Download unsigned macOS   │
-│ Build Windows AAX│───────▶│ Download unsigned Windows │
-│ (both unsigned)  │         │                          │
-└─────────────────┘         │ Wrap macOS AAX (native)   │
-                            │ Wrap Windows AAX (UTM VM) │
-                            │                          │
-                            │ Build final installers    │
-                            └──────────────────────────┘
-```
+When PACE credentials are configured as GitHub Secrets, the CI workflow wraps both platforms automatically. The installers include the wrapped AAX, and the individual AAX artifacts are also uploaded.
 
 ---
 
-## Prerequisites
+## CI Wrapping (Automatic)
 
-### On your Mac (native)
+The `build.yml` workflow handles AAX wrapping when PACE secrets are present. If the secrets aren't configured, the build still succeeds — it just produces unsigned AAX plugins.
 
-- **Eden SDK** installed (provides `wraptool` and `iloktool`)
+### Required GitHub Secrets
+
+Add these in **Settings → Secrets and variables → Actions** on your repo:
+
+| Secret | Description |
+|--------|-------------|
+| `ILOK_USERNAME` | Your iLok account username |
+| `ILOK_PASSWORD` | Your iLok account password |
+| `PACE_CUSTOMER_NUMBER` | Provided by Avid/PACE for your signing agreement |
+| `BUILD_TOOLS_TOKEN` | GitHub PAT with access to `mbmattie/build-tools` (already configured) |
+
+The following secrets should already be configured from the Apple signing setup:
+
+| Secret | Already Configured |
+|--------|-------------------|
+| `APPLE_TEAM_ID` | Used for macOS `wraptool --signid` |
+| `MACOS_APP_CERTIFICATE` | Developer ID Application cert (keychain) |
+| `MACOS_INSTALLER_CERTIFICATE` | Developer ID Installer cert |
+| `MACOS_CERTIFICATE_PWD` | P12 password for certs |
+
+### How It Works
+
+**macOS runner:**
+1. Downloads Eden SDK DMG from `mbmattie/build-tools` (release `eden-sdk-mac-v5.10.4`)
+2. Installs the SDK (provides `wraptool` and `iloktool`)
+3. Sets the CI keychain as default (PACE docs workaround for runners)
+4. Opens iLok Cloud session → wraps AAX → verifies → closes session
+5. Replaces the unsigned AAX in the build directory before building the installer
+
+**Windows runner:**
+1. Downloads pre-extracted `pace-tools-win64.zip` from `mbmattie/build-tools` (release `eden-sdk-v5.10.4`)
+2. Extracts `wraptool.exe`, `iloktool.exe`, and companion DLLs — no installer needed
+3. Opens iLok Cloud session → wraps AAX → verifies → closes session
+4. Replaces the unsigned AAX in the build directory before building the installer
+
+### Build-Tools Release Assets
+
+| Release | Asset | Purpose |
+|---------|-------|---------|
+| `eden-sdk-mac-v5.10.4` | `EdenSDKLiteInstallerMac_v5.10.4_72ed0501.2.dmg` | macOS Eden SDK installer |
+| `eden-sdk-v5.10.4` | `pace-tools-win64.zip` | Pre-extracted Windows wraptool + iloktool + DLLs |
+| `eden-sdk-v5.10.4` | `EdenSDKLiteInstallerWin64.zip` | Full Windows installer (for reference) |
+
+---
+
+## Local macOS Wrapping (Optional)
+
+If you prefer to wrap the macOS AAX locally instead of on CI, or need to re-wrap an artifact:
+
+### Prerequisites
+
+- **Eden SDK** installed on your Mac (provides `wraptool` and `iloktool`)
   - Path: `/Applications/PACEAntiPiracy/Eden/Fusion/Versions/5/bin/wraptool`
 - **iLok account** with PACE signing credentials
 - **Apple Developer ID** certificate in your Keychain
 
-### In the Windows VM (UTM)
-
-- **Eden SDK for Windows** installed (provides `wraptool.exe` and `iloktool.exe`)
-  - Download from your private `mbmattie/build-tools` repo (release: `eden-sdk-v5.10.4`)
-  - Run the installer — it will place tools under `C:\Program Files\PACE Anti-Piracy\Eden\`
-- **iLok account** (same credentials as macOS)
-
----
-
-## Step 1: Download Unsigned AAX Artifacts from GitHub
-
-After a CI build completes, download the unsigned AAX artifacts.
-
-### Using the GitHub CLI
+### Download Unsigned AAX from CI
 
 ```bash
 # List recent workflow runs
 gh run list --repo mbmattie/VocalRiderPlugin --limit 5
 
-# Download unsigned AAX artifacts from a specific run
+# Download the macOS AAX artifact
 RUN_ID=<run-id-from-above>
-
 gh run download $RUN_ID \
   --repo mbmattie/VocalRiderPlugin \
-  --name "magic.RIDE-1.2.0-macOS-AAX-Unsigned" \
+  --name "magic.RIDE-1.2.0-macOS-AAX" \
   --dir ~/Desktop/aax-unsigned/macos
-
-gh run download $RUN_ID \
-  --repo mbmattie/VocalRiderPlugin \
-  --name "magic.RIDE-1.2.0-Windows-AAX-Unsigned" \
-  --dir ~/Desktop/aax-unsigned/windows
 ```
 
-### Using the GitHub Web UI
+Or download from the GitHub web UI: **Actions → click run → Artifacts → download**.
 
-1. Go to **Actions** tab in your repo
-2. Click the build run
-3. Scroll to **Artifacts** at the bottom
-4. Download `magic.RIDE-1.2.0-macOS-AAX-Unsigned` and `magic.RIDE-1.2.0-Windows-AAX-Unsigned`
-5. Unzip both to `~/Desktop/aax-unsigned/macos/` and `~/Desktop/aax-unsigned/windows/`
-
----
-
-## Step 2: Wrap macOS AAX (Native)
-
-Run these commands from your Mac terminal:
+### Wrap the AAX
 
 ```bash
 WRAPTOOL="/Applications/PACEAntiPiracy/Eden/Fusion/Versions/5/bin/wraptool"
@@ -84,10 +94,8 @@ AAX_OUT="$HOME/Desktop/aax-signed/macos/magic.RIDE.aaxplugin"
 
 mkdir -p "$HOME/Desktop/aax-signed/macos"
 
-# Open iLok cloud session
 iloktool cloud --open --account "<ILOK_USERNAME>" --password "<ILOK_PASSWORD>" -v
 
-# Wrap/sign the AAX plugin
 $WRAPTOOL sign --verbose \
   --account "<ILOK_USERNAME>" \
   --signid "Developer ID Application: MATTHEW STEVEN ERNST (<TEAM_ID>)" \
@@ -99,114 +107,21 @@ $WRAPTOOL sign --verbose \
   --in "$AAX_IN" \
   --out "$AAX_OUT"
 
-# Verify
 $WRAPTOOL verify --verbose --in "$AAX_OUT"
 
-# Close iLok session
 iloktool cloud --close -v
 ```
 
----
-
-## Step 3: Wrap Windows AAX (UTM VM)
-
-### One-Time VM Setup
-
-1. **Install Eden SDK** — Run the Eden SDK Windows installer inside the VM.
-   The easiest way to get the installer into the VM is via a shared folder or by
-   downloading it directly inside the VM from your private GitHub repo.
-
-2. **Verify tools are available** — Open PowerShell in the VM and check:
-   ```powershell
-   # Typical install locations
-   Get-ChildItem "C:\Program Files\PACE Anti-Piracy" -Recurse -Filter "wraptool.exe"
-   Get-ChildItem "C:\Program Files\PACE Anti-Piracy" -Recurse -Filter "iloktool.exe"
-   ```
-
-3. **Set up a shared folder** between Mac and VM:
-   - In UTM, select your VM → **Edit** → **Sharing**
-   - Enable **Directory Sharing** and point it at a folder like `~/Desktop/aax-unsigned`
-   - Inside Windows, the shared folder appears as a network drive or under
-     `\\Mac\` — you may need to install SPICE WebDAV to access it
-
-### Wrapping the Windows AAX
-
-Open PowerShell in the VM:
-
-```powershell
-$WRAPTOOL = "C:\Program Files\PACE Anti-Piracy\Eden\Fusion\Versions\5\bin\wraptool.exe"
-$ILOKTOOL = "C:\Program Files\PACE Anti-Piracy\Eden\Fusion\Versions\5\bin\iloktool.exe"
-$AAX_IN   = "Z:\windows\magic.RIDE.aaxplugin"   # Shared folder path (adjust as needed)
-$AAX_OUT  = "C:\Users\$env:USERNAME\Desktop\magic.RIDE_signed.aaxplugin"
-
-# Open iLok cloud session
-& $ILOKTOOL cloud --open --account "<ILOK_USERNAME>" --password "<ILOK_PASSWORD>" -v
-
-# Wrap/sign the AAX plugin
-& $WRAPTOOL sign --verbose `
-  --account "<ILOK_USERNAME>" `
-  --customernumber "<PACE_CUSTOMER_NUMBER>" `
-  --customername "MBM Audio" `
-  --productname "magic.RIDE" `
-  --allowsigningservice `
-  --dsig1-compat off `
-  --in $AAX_IN `
-  --out $AAX_OUT
-
-# Verify
-& $WRAPTOOL verify --verbose --in $AAX_OUT
-
-# Close iLok session
-& $ILOKTOOL cloud --close -v
-```
-
-Copy the signed `magic.RIDE_signed.aaxplugin` back to your Mac via the shared folder.
-
----
-
-## Step 4: Build Final Installers
-
-Once you have both signed AAX plugins, include them in your installers.
-
-### macOS Installer
-
-Copy the signed macOS AAX into the installer staging area and rebuild:
+### Rebuild Installer with Signed AAX
 
 ```bash
-# Copy signed AAX to where the installer script expects it
 cp -R ~/Desktop/aax-signed/macos/magic.RIDE.aaxplugin \
   build/VocalRider_artefacts/Release/AAX/magic.RIDE.aaxplugin
 
-# Rebuild the installer
 cd installer && ./build_installer.sh
 ```
 
 Then sign, notarize, and staple the `.pkg` as usual.
-
-### Windows Installer
-
-Copy the signed Windows AAX into the build output and rebuild with Inno Setup:
-
-```powershell
-# In the VM, copy signed AAX to the expected build location
-Copy-Item -Recurse -Force `
-  "C:\Users\$env:USERNAME\Desktop\magic.RIDE_signed.aaxplugin" `
-  "build\VocalRider_artefacts\Release\AAX\magic.RIDE.aaxplugin"
-
-# Build installer with Inno Setup
-& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\windows\magic.RIDE.iss
-```
-
----
-
-## Credential Reference
-
-| Secret | Description |
-|--------|-------------|
-| `ILOK_USERNAME` | Your iLok account username |
-| `ILOK_PASSWORD` | Your iLok account password |
-| `PACE_CUSTOMER_NUMBER` | Provided by Avid/PACE for signing |
-| `TEAM_ID` | Apple Developer Team ID (macOS only) |
 
 ---
 
@@ -216,12 +131,16 @@ Copy-Item -Recurse -Force `
 - Make sure `iloktool cloud --open` succeeded before running `wraptool sign`
 - Check that your iLok credentials are correct
 - Ensure your PACE customer number is active
+- iLok Cloud can only be active on one machine at a time — close other sessions first
 
-### Windows VM shared folder not visible
-- In UTM, check that Directory Sharing is enabled for the VM
-- Inside Windows, install the **SPICE WebDAV** service if prompted by the guest tools
-- Try accessing `\\localhost\DavWWWRoot\` in File Explorer
+### CI wrapping step skipped
+- The wrapping steps only run when `ILOK_USERNAME` is set as a GitHub Secret
+- Check **Settings → Secrets** on your repo
 
-### wraptool not found in Windows VM
-- The Eden SDK installer may place tools in a versioned path — search `C:\Program Files` recursively
-- If you extracted with 7-Zip instead of running the installer, you may be missing runtime DLLs
+### macOS CI keychain errors
+- The workflow sets `security default-keychain` before running wraptool (PACE docs workaround)
+- If wraptool still fails with keychain errors, check that `MACOS_APP_CERTIFICATE` is valid
+
+### Windows wraptool errors on CI
+- The pre-extracted tools are x86_64 binaries running natively on the Windows runner
+- If `wraptool sign` fails without `--signid`/`--keyfile`, PACE Cloud Signing may require a Windows Authenticode certificate — add one via `--keyfile` when you have your OV cert

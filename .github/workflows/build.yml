@@ -82,6 +82,92 @@ jobs:
           echo "AAX Apple-codesigned (wraptool will re-sign later if available)."
         fi
     
+    - name: Check PACE credentials
+      id: pace-check
+      run: |
+        if [ -n "$CRED" ]; then
+          echo "available=true" >> $GITHUB_OUTPUT
+        else
+          echo "available=false" >> $GITHUB_OUTPUT
+          echo "⚠ PACE credentials not configured — AAX will remain unsigned"
+        fi
+      env:
+        CRED: ${{ secrets.ILOK_USERNAME }}
+
+    - name: Download & Install Eden SDK
+      if: steps.pace-check.outputs.available == 'true'
+      env:
+        GH_TOKEN: ${{ secrets.BUILD_TOOLS_TOKEN }}
+      run: |
+        gh release download eden-sdk-mac-v5.10.4 \
+          --repo mbmattie/build-tools \
+          --pattern "*.dmg" \
+          --dir "$RUNNER_TEMP"
+
+        DMG=$(ls "$RUNNER_TEMP"/*.dmg | head -1)
+        MOUNT_DIR=$(hdiutil attach "$DMG" -nobrowse | tail -1 | awk -F'\t' '{print $NF}')
+        echo "Mounted at: $MOUNT_DIR"
+
+        PKG=$(find "$MOUNT_DIR" -name "*.pkg" -maxdepth 2 | head -1)
+        if [ -n "$PKG" ]; then
+          sudo installer -pkg "$PKG" -target /
+        else
+          echo "ERROR: No .pkg found in DMG"
+          find "$MOUNT_DIR" -maxdepth 3
+          exit 1
+        fi
+
+        hdiutil detach "$MOUNT_DIR" || true
+
+        WRAPTOOL="/Applications/PACEAntiPiracy/Eden/Fusion/Versions/5/bin/wraptool"
+        if [ -f "$WRAPTOOL" ]; then
+          echo "wraptool installed at: $WRAPTOOL"
+        else
+          echo "Searching for wraptool..."
+          find /Applications/PACEAntiPiracy -name "wraptool" -type f 2>/dev/null || true
+        fi
+
+    - name: Wrap macOS AAX with PACE wraptool
+      if: steps.pace-check.outputs.available == 'true'
+      env:
+        ILOK_USERNAME: ${{ secrets.ILOK_USERNAME }}
+        ILOK_PASSWORD: ${{ secrets.ILOK_PASSWORD }}
+        PACE_CUSTOMER_NUMBER: ${{ secrets.PACE_CUSTOMER_NUMBER }}
+        TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      run: |
+        WRAPTOOL="/Applications/PACEAntiPiracy/Eden/Fusion/Versions/5/bin/wraptool"
+        ILOKTOOL=$(which iloktool 2>/dev/null || find /Applications/PACEAntiPiracy /usr/local -name "iloktool" -type f 2>/dev/null | head -1)
+
+        if [ ! -f "$WRAPTOOL" ]; then echo "ERROR: wraptool not found"; exit 1; fi
+        if [ -z "$ILOKTOOL" ]; then echo "ERROR: iloktool not found"; exit 1; fi
+
+        security default-keychain -s $RUNNER_TEMP/app-signing.keychain-db
+
+        "$ILOKTOOL" cloud --open --account "$ILOK_USERNAME" --password "$ILOK_PASSWORD" -v
+
+        AAX_DIR="build/VocalRider_artefacts/Release/AAX"
+        AAX_IN="$AAX_DIR/magic.RIDE.aaxplugin"
+        AAX_OUT="$RUNNER_TEMP/magic.RIDE.aaxplugin"
+
+        "$WRAPTOOL" sign --verbose \
+          --account "$ILOK_USERNAME" \
+          --signid "Developer ID Application: MATTHEW STEVEN ERNST ($TEAM_ID)" \
+          --customernumber "$PACE_CUSTOMER_NUMBER" \
+          --customername "MBM Audio" \
+          --productname "magic.RIDE" \
+          --allowsigningservice \
+          --dsig1-compat off \
+          --in "$AAX_IN" \
+          --out "$AAX_OUT"
+
+        "$WRAPTOOL" verify --verbose --in "$AAX_OUT"
+
+        rm -rf "$AAX_IN"
+        cp -R "$AAX_OUT" "$AAX_IN"
+
+        "$ILOKTOOL" cloud --close -v
+        echo "macOS AAX successfully wrapped and verified"
+
     - name: Build Installer
       run: |
         cd installer
@@ -202,10 +288,10 @@ jobs:
         name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-macOS-VST3
         path: build/VocalRider_artefacts/Release/VST3/*.vst3
     
-    - name: Upload macOS AAX (Unsigned)
+    - name: Upload macOS AAX
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-macOS-AAX-Unsigned
+        name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-macOS-AAX
         path: build/VocalRider_artefacts/Release/AAX/*.aaxplugin
     
     - name: Upload macOS Lite AU (Signed)
@@ -252,6 +338,75 @@ jobs:
         dir build\VocalRider_artefacts\Release\VST3\ /s
       shell: cmd
     
+    - name: Check PACE credentials
+      id: pace-check
+      shell: pwsh
+      run: |
+        if ($env:CRED) {
+          "available=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        } else {
+          "available=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "PACE credentials not configured - AAX will remain unsigned"
+        }
+      env:
+        CRED: ${{ secrets.ILOK_USERNAME }}
+
+    - name: Download PACE tools
+      if: steps.pace-check.outputs.available == 'true'
+      env:
+        GH_TOKEN: ${{ secrets.BUILD_TOOLS_TOKEN }}
+      shell: pwsh
+      run: |
+        $toolsDir = "$env:RUNNER_TEMP\pace-tools"
+        New-Item -ItemType Directory -Path $toolsDir -Force | Out-Null
+        gh release download eden-sdk-v5.10.4 `
+          --repo mbmattie/build-tools `
+          --pattern "pace-tools-win64.zip" `
+          --dir $toolsDir
+        Expand-Archive -Path "$toolsDir\pace-tools-win64.zip" -DestinationPath $toolsDir -Force
+        Get-ChildItem $toolsDir -Filter "*.exe" | ForEach-Object { Write-Host "Found: $($_.Name)" }
+
+    - name: Wrap Windows AAX with PACE wraptool
+      if: steps.pace-check.outputs.available == 'true'
+      env:
+        ILOK_USERNAME: ${{ secrets.ILOK_USERNAME }}
+        ILOK_PASSWORD: ${{ secrets.ILOK_PASSWORD }}
+        PACE_CUSTOMER_NUMBER: ${{ secrets.PACE_CUSTOMER_NUMBER }}
+      shell: pwsh
+      run: |
+        $toolsDir = "$env:RUNNER_TEMP\pace-tools"
+        $WRAPTOOL = "$toolsDir\wraptool.exe"
+        $ILOKTOOL = "$toolsDir\iloktool.exe"
+
+        if (-not (Test-Path $WRAPTOOL)) { Write-Error "wraptool.exe not found"; exit 1 }
+        if (-not (Test-Path $ILOKTOOL)) { Write-Error "iloktool.exe not found"; exit 1 }
+
+        & $ILOKTOOL cloud --open --account $env:ILOK_USERNAME --password $env:ILOK_PASSWORD -v
+
+        $AAX_DIR = "build\VocalRider_artefacts\Release\AAX"
+        $AAX_IN  = "$AAX_DIR\magic.RIDE.aaxplugin"
+        $AAX_OUT = "$env:RUNNER_TEMP\magic.RIDE.aaxplugin"
+
+        & $WRAPTOOL sign --verbose `
+          --account $env:ILOK_USERNAME `
+          --customernumber $env:PACE_CUSTOMER_NUMBER `
+          --customername "MBM Audio" `
+          --productname "magic.RIDE" `
+          --allowsigningservice `
+          --dsig1-compat off `
+          --in $AAX_IN `
+          --out $AAX_OUT
+
+        if ($LASTEXITCODE -ne 0) { Write-Error "wraptool sign failed"; exit 1 }
+
+        & $WRAPTOOL verify --verbose --in $AAX_OUT
+
+        Remove-Item -Recurse -Force $AAX_IN
+        Copy-Item -Recurse $AAX_OUT $AAX_IN
+
+        & $ILOKTOOL cloud --close -v
+        Write-Host "Windows AAX successfully wrapped and verified"
+
     - name: Create installer output directory
       run: mkdir -p installer\output
       shell: pwsh
@@ -284,10 +439,10 @@ jobs:
         name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-Windows-VST3
         path: build/VocalRider_artefacts/Release/VST3/*.vst3
     
-    - name: Upload Windows AAX (Unsigned)
+    - name: Upload Windows AAX
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-Windows-AAX-Unsigned
+        name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-Windows-AAX
         path: build/VocalRider_artefacts/Release/AAX/*.aaxplugin
     
     - name: Upload Windows Standalone
