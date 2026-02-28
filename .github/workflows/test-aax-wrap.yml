@@ -159,19 +159,9 @@ jobs:
         Write-Host "wraptool hangs during its internal signtool call."
         Write-Host "Running with 90s timeout, then signing with signtool directly."
 
-        $wrapArgs = @(
-          "sign", "--verbose",
-          "--account", $env:ILOK_USERNAME,
-          "--customernumber", $env:PACE_CUSTOMER_NUMBER,
-          "--customername", "MBM Audio",
-          "--productname", "magic.RIDE",
-          "--allowsigningservice",
-          "--signid", $thumbprint,
-          "--in", $AAX_IN,
-          "--out", $AAX_OUT
-        )
+        $wrapCmd = "sign --verbose --account `"$($env:ILOK_USERNAME)`" --customernumber `"$($env:PACE_CUSTOMER_NUMBER)`" --customername `"MBM Audio`" --productname `"magic.RIDE`" --allowsigningservice --signid $thumbprint --in `"$AAX_IN`" --out `"$AAX_OUT`""
 
-        $proc = Start-Process -FilePath $WRAPTOOL -ArgumentList $wrapArgs -PassThru -NoNewWindow -RedirectStandardOutput "$env:RUNNER_TEMP\wrap_stdout.txt" -RedirectStandardError "$env:RUNNER_TEMP\wrap_stderr.txt"
+        $proc = Start-Process -FilePath $WRAPTOOL -ArgumentList $wrapCmd -PassThru -NoNewWindow -RedirectStandardOutput "$env:RUNNER_TEMP\wrap_stdout.txt" -RedirectStandardError "$env:RUNNER_TEMP\wrap_stderr.txt"
 
         $waited = 0
         while (-not $proc.HasExited -and $waited -lt 90) {
