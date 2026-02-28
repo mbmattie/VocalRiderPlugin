@@ -30,17 +30,22 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       shell: pwsh
       run: |
+        $repo = "${{ github.repository }}"
         $runId = "${{ inputs.run_id }}"
         if (-not $runId) {
-          $runs = gh run list --repo ${{ github.repository }} --workflow build.yml --status success --limit 1 --json databaseId | ConvertFrom-Json
+          $runs = gh run list --repo $repo --workflow build.yml --status success --limit 1 --json databaseId | ConvertFrom-Json
           $runId = $runs[0].databaseId
         }
         Write-Host "Downloading AAX from build run: $runId"
         New-Item -ItemType Directory -Path aax-input -Force | Out-Null
 
-        # Handle both old (Unsigned suffix) and new artifact names
-        try { gh run download $runId --name "magic.RIDE-1.2.0-Windows-AAX-Unsigned" --dir aax-input }
-        catch { gh run download $runId --name "magic.RIDE-1.2.0-Windows-AAX" --dir aax-input }
+        $downloaded = $false
+        gh run download $runId --repo $repo --name "magic.RIDE-1.2.0-Windows-AAX-Unsigned" --dir aax-input 2>$null
+        if ($LASTEXITCODE -eq 0) { $downloaded = $true }
+        if (-not $downloaded) {
+          gh run download $runId --repo $repo --name "magic.RIDE-1.2.0-Windows-AAX" --dir aax-input
+          if ($LASTEXITCODE -ne 0) { Write-Error "Failed to download AAX artifact"; exit 1 }
+        }
 
         Write-Host "=== Downloaded AAX contents ==="
         Get-ChildItem aax-input -Recurse | ForEach-Object {
@@ -117,15 +122,16 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
+        REPO="${{ github.repository }}"
         RUN_ID="${{ inputs.run_id }}"
         if [ -z "$RUN_ID" ]; then
-          RUN_ID=$(gh run list --repo ${{ github.repository }} --workflow build.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          RUN_ID=$(gh run list --repo "$REPO" --workflow build.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId')
         fi
         echo "Downloading AAX from build run: $RUN_ID"
         mkdir -p aax-input
 
-        gh run download "$RUN_ID" --name "magic.RIDE-1.2.0-macOS-AAX-Unsigned" --dir aax-input 2>/dev/null \
-          || gh run download "$RUN_ID" --name "magic.RIDE-1.2.0-macOS-AAX" --dir aax-input
+        gh run download "$RUN_ID" --repo "$REPO" --name "magic.RIDE-1.2.0-macOS-AAX-Unsigned" --dir aax-input 2>/dev/null \
+          || gh run download "$RUN_ID" --repo "$REPO" --name "magic.RIDE-1.2.0-macOS-AAX" --dir aax-input
 
         echo "=== Downloaded AAX contents ==="
         find aax-input -type f | head -20
