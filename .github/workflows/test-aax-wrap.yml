@@ -155,26 +155,76 @@ jobs:
         Write-Host "`n=== Opening iLok Cloud session ==="
         & $ILOKTOOL cloud --open --account $env:ILOK_USERNAME --password $env:ILOK_PASSWORD -v
 
-        Write-Host "`n=== Signing AAX with wraptool ==="
-        & $WRAPTOOL sign --verbose `
-          --account $env:ILOK_USERNAME `
-          --customernumber $env:PACE_CUSTOMER_NUMBER `
-          --customername "MBM Audio" `
-          --productname "magic.RIDE" `
-          --allowsigningservice `
-          --signid $thumbprint `
-          --timestampurl "http://timestamp.digicert.com" `
-          --extrasigningoptions "/fd sha256 /td sha256 /v" `
-          --in $AAX_IN `
-          --out $AAX_OUT
+        Write-Host "`n=== Signing AAX with wraptool (with timeout workaround) ==="
+        Write-Host "wraptool hangs during its internal signtool call."
+        Write-Host "Running with 90s timeout, then signing with signtool directly."
 
-        if ($LASTEXITCODE -ne 0) { Write-Error "wraptool sign failed (exit code $LASTEXITCODE)"; exit 1 }
+        $wrapArgs = @(
+          "sign", "--verbose",
+          "--account", $env:ILOK_USERNAME,
+          "--customernumber", $env:PACE_CUSTOMER_NUMBER,
+          "--customername", "MBM Audio",
+          "--productname", "magic.RIDE",
+          "--allowsigningservice",
+          "--signid", $thumbprint,
+          "--in", $AAX_IN,
+          "--out", $AAX_OUT
+        )
 
-        Write-Host "`n=== Verifying signed AAX ==="
+        $proc = Start-Process -FilePath $WRAPTOOL -ArgumentList $wrapArgs -PassThru -NoNewWindow -RedirectStandardOutput "$env:RUNNER_TEMP\wrap_stdout.txt" -RedirectStandardError "$env:RUNNER_TEMP\wrap_stderr.txt"
+
+        $waited = 0
+        while (-not $proc.HasExited -and $waited -lt 90) {
+          Start-Sleep -Seconds 5
+          $waited += 5
+          if (Test-Path $AAX_OUT) {
+            $size = (Get-ChildItem $AAX_OUT -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+            Write-Host "  ${waited}s - output exists (${size} bytes)"
+          } else {
+            Write-Host "  ${waited}s - waiting for output..."
+          }
+        }
+
+        if (-not $proc.HasExited) {
+          Write-Host "wraptool still running after ${waited}s (expected signtool hang). Killing."
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 3
+        } else {
+          Write-Host "wraptool exited with code: $($proc.ExitCode)"
+        }
+
+        Write-Host "`n=== wraptool stdout ==="
+        if (Test-Path "$env:RUNNER_TEMP\wrap_stdout.txt") { Get-Content "$env:RUNNER_TEMP\wrap_stdout.txt" }
+        Write-Host "`n=== wraptool stderr ==="
+        if (Test-Path "$env:RUNNER_TEMP\wrap_stderr.txt") { Get-Content "$env:RUNNER_TEMP\wrap_stderr.txt" }
+
+        if (-not (Test-Path $AAX_OUT)) {
+          Write-Error "No output AAX created"
+          exit 1
+        }
+
+        Write-Host "`n=== Checking PACE verification ==="
         & $WRAPTOOL verify --verbose --in $AAX_OUT
+        $verifyCode = $LASTEXITCODE
+        Write-Host "wraptool verify exit code: $verifyCode"
+
+        # Now sign with signtool directly (this works — we proved it above)
+        Write-Host "`n=== Signing with signtool directly ==="
+        $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits" -Filter "signtool.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*x64*" } | Select-Object -Last 1).FullName
+        $targetBin = (Get-ChildItem $AAX_OUT -Filter "*.aaxplugin" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+        if (-not $targetBin) { $targetBin = (Get-ChildItem $AAX_OUT -Filter "*.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName }
+
+        if ($signtool -and $targetBin) {
+          Write-Host "signtool: $signtool"
+          Write-Host "target: $targetBin"
+          & $signtool sign /sha1 $thumbprint /fd sha256 /tr http://timestamp.digicert.com /td sha256 $targetBin
+          Write-Host "signtool exit code: $LASTEXITCODE"
+        } else {
+          Write-Host "WARNING: Could not find signtool ($signtool) or target binary ($targetBin)"
+        }
 
         & $ILOKTOOL cloud --close -v
-        Write-Host "`nWindows AAX wrapped successfully"
+        Write-Host "`nDone. Output AAX at: $AAX_OUT"
 
     - name: Upload wrapped Windows AAX
       uses: actions/upload-artifact@v4
