@@ -176,8 +176,9 @@ void DualRangeKnob::drawDualArcKnob(juce::Graphics& g, juce::Rectangle<float> bo
     auto radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) / 2.0f * 0.92f;
     bool isHovered = mouseHovering;
 
-    auto purpleColour = CustomLookAndFeel::getAccentColour();
-    auto outerMetallicColour = juce::Colour(0xFF6AAABB);  // Bluish-teal for outer ring
+    bool isDisabled = !isEnabled();
+    auto purpleColour = isDisabled ? juce::Colour(0xFF3A3D48) : CustomLookAndFeel::getAccentColour();
+    auto outerMetallicColour = isDisabled ? juce::Colour(0xFF3A4048) : juce::Colour(0xFF6AAABB);
 
     float boostAngle = valueToAngle(boostValue, minDb, maxDb);
     float cutAngle = valueToAngle(cutValue, minDb, maxDb);

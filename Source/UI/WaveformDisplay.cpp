@@ -307,6 +307,9 @@ WaveformDisplay::DragTarget WaveformDisplay::hitTestHandle(const juce::Point<flo
 
 void WaveformDisplay::mouseDown(const juce::MouseEvent& event)
 {
+    if (!onTargetChanged && !onBoostRangeChanged && !onCutRangeChanged && !onRangeChanged)
+        return;
+
     auto pos = event.position;
     currentDragTarget = hitTestHandle(pos);
     
@@ -380,6 +383,12 @@ void WaveformDisplay::mouseUp(const juce::MouseEvent&)
 
 void WaveformDisplay::mouseMove(const juce::MouseEvent& event)
 {
+    if (!onTargetChanged && !onBoostRangeChanged && !onCutRangeChanged && !onRangeChanged)
+    {
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        return;
+    }
+
     auto newHover = hitTestHandle(event.position);
     if (newHover != hoverTarget)
     {

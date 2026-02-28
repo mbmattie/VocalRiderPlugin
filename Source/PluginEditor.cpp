@@ -538,7 +538,6 @@ VocalRiderAudioProcessorEditor::VocalRiderAudioProcessorEditor(VocalRiderAudioPr
     
     advancedPanel.setVisible(false);
     advancedPanel.onAnimationUpdate = [this] {
-        // Update child component opacity during fade animation
         float alpha = advancedPanel.getCurrentOpacity();
         advancedHeaderLabel.setAlpha(alpha);
         lookAheadComboBox.setAlpha(alpha);
@@ -852,54 +851,70 @@ void VocalRiderAudioProcessorEditor::setupLiteRestrictions()
     addAndMakeVisible(upgradeStripLabel);
 
     //==================================================================
-    // LOCK MAIN CONTROLS — target, range, dual range knob, range lock
-    auto disableControl = [this](juce::Component& comp) {
+    // Muted colour for locked labels — visible but clearly inactive
+    auto mutedTextColour = juce::Colour(0xFF4A5060);
+
+    // Disable + mute a control (full opacity, but setEnabled false)
+    auto lockControl = [this](juce::Component& comp) {
         comp.setEnabled(false);
-        comp.setAlpha(liteLockedAlpha);
     };
 
-    disableControl(targetSlider);
-    disableControl(dualRangeKnob);
-    disableControl(rangeLockButton);
-    disableControl(rangeSlider);
-    disableControl(boostRangeSlider);
-    disableControl(cutRangeSlider);
+    // Apply muted text colour to a label
+    auto muteLabel = [mutedTextColour](juce::Label& label) {
+        label.setColour(juce::Label::textColourId, mutedTextColour);
+    };
+
+    //==================================================================
+    // LOCK SPEED at 50% (the key lite limitation)
+    lockControl(speedSlider);
+    if (auto* param = audioProcessor.getApvts().getParameter(VocalRiderAudioProcessor::speedParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(50.0f));
+
+    // LOCK RANGE CONTROLS
+    lockControl(dualRangeKnob);
+    lockControl(rangeLockButton);
+    lockControl(rangeSlider);
+    lockControl(boostRangeSlider);
+    lockControl(cutRangeSlider);
 
     // LOCK ADVANCED CONTROLS
-    disableControl(attackSlider);
-    disableControl(releaseSlider);
-    disableControl(holdSlider);
-    disableControl(breathReductionSlider);
-    disableControl(transientPreservationSlider);
-    disableControl(noiseFloorSlider);
-    disableControl(outputTrimMeter);
-    disableControl(lookAheadComboBox);
-    disableControl(detectionModeComboBox);
+    lockControl(attackSlider);
+    lockControl(releaseSlider);
+    lockControl(holdSlider);
+    lockControl(breathReductionSlider);
+    lockControl(transientPreservationSlider);
+    lockControl(noiseFloorSlider);
+    lockControl(lookAheadComboBox);
+    lockControl(detectionModeComboBox);
 
     // LOCK AUTOMATION MODE
-    disableControl(automationModeComboBox);
+    lockControl(automationModeComboBox);
 
-    // LOCK PRESETS, A/B, UNDO/REDO (lite uses defaults only)
-    disableControl(presetComboBox);
-    disableControl(prevPresetButton);
-    disableControl(nextPresetButton);
-    disableControl(abCompareButton);
-    disableControl(undoButton);
-    disableControl(redoButton);
+    // LOCK PRESETS, A/B, UNDO/REDO
+    lockControl(presetComboBox);
+    lockControl(prevPresetButton);
+    lockControl(nextPresetButton);
+    lockControl(abCompareButton);
+    lockControl(undoButton);
+    lockControl(redoButton);
 
-    // Dim associated labels for locked controls
-    targetLabel.setAlpha(liteLockedAlpha);
-    rangeLabel.setAlpha(liteLockedAlpha);
-    automationLabel.setAlpha(liteLockedAlpha);
+    // Mute associated labels to match locked controls
+    muteLabel(rangeLabel);
+    muteLabel(automationLabel);
+    muteLabel(attackLabel);
+    muteLabel(releaseLabel);
+    muteLabel(holdLabel);
+    muteLabel(breathLabel);
+    muteLabel(transientLabel);
+    muteLabel(noiseFloorLabel);
 
-    // Re-enable mouse clicks on locked controls so we can intercept them for upgrade dialog.
-    // setEnabled(false) blocks normal interaction but we still want to catch clicks
-    // to show the upgrade prompt. We add 'this' as a mouse listener on each.
+    //==================================================================
+    // Re-enable mouse clicks on locked controls for upgrade dialog
     auto enableClicksForUpgrade = [this](juce::Component& comp) {
         comp.setInterceptsMouseClicks(true, true);
         comp.addMouseListener(this, false);
     };
-    enableClicksForUpgrade(targetSlider);
+    enableClicksForUpgrade(speedSlider);
     enableClicksForUpgrade(dualRangeKnob);
     enableClicksForUpgrade(rangeLockButton);
     enableClicksForUpgrade(automationModeComboBox);
@@ -915,28 +930,38 @@ void VocalRiderAudioProcessorEditor::setupLiteRestrictions()
     enableClicksForUpgrade(breathReductionSlider);
     enableClicksForUpgrade(transientPreservationSlider);
     enableClicksForUpgrade(noiseFloorSlider);
-    enableClicksForUpgrade(outputTrimMeter);
     enableClicksForUpgrade(lookAheadComboBox);
     enableClicksForUpgrade(detectionModeComboBox);
 
     //==================================================================
-    // AUTO-TARGET BADGE — flashing indicator in top-right corner
+    // FORCE RANGE TO ±4 dB
+    if (auto* param = audioProcessor.getApvts().getParameter(VocalRiderAudioProcessor::rangeParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(4.0f));
+    if (auto* param = audioProcessor.getApvts().getParameter(VocalRiderAudioProcessor::boostRangeParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(4.0f));
+    if (auto* param = audioProcessor.getApvts().getParameter(VocalRiderAudioProcessor::cutRangeParamId))
+        param->setValueNotifyingHost(param->convertTo0to1(4.0f));
+
+    //==================================================================
+    // DISABLE ALL WAVEFORM HANDLE DRAGGING (target, range)
+    waveformDisplay.onTargetChanged = nullptr;
+    waveformDisplay.onBoostRangeChanged = nullptr;
+    waveformDisplay.onCutRangeChanged = nullptr;
+    waveformDisplay.onRangeChanged = nullptr;
+
+    //==================================================================
+    // AUTO-TARGET BADGE — flashing indicator centered on GUI
     autoTargetBadgeLabel.setText("AUTO-TARGET", juce::dontSendNotification);
-    autoTargetBadgeLabel.setFont(CustomLookAndFeel::getPluginFont(9.0f, true));
+    autoTargetBadgeLabel.setFont(CustomLookAndFeel::getPluginFont(11.0f, true));
     autoTargetBadgeLabel.setColour(juce::Label::textColourId, CustomLookAndFeel::getAccentColour());
     autoTargetBadgeLabel.setJustificationType(juce::Justification::centred);
     autoTargetBadgeLabel.setVisible(false);
     addAndMakeVisible(autoTargetBadgeLabel);
 
     //==================================================================
-    // AUTO-TARGET ON by default in lite version
-    autoTargetButton.setToggleState(true, juce::dontSendNotification);
-    autoTargetButton.setPulsing(true);
-    learnCountdown = 90;
-    learnMinDb = 6.0f;
-    learnMaxDb = -100.0f;
-    learnSumDb = 0.0f;
-    learnSampleCount = 0;
+    // AUTO-TARGET — armed, waits for audio before starting
+    liteAutoTargetArmed = true;
+    liteUpgradeTimerCount = 0;
 }
 
 void VocalRiderAudioProcessorEditor::showLiteUpgradeDialog()
@@ -1333,7 +1358,6 @@ void VocalRiderAudioProcessorEditor::toggleAdvancedPanel()
     trimMidLabel.setVisible(true);
     trimMaxLabel.setVisible(true);
     
-    // Set child component opacity via alpha
     float alpha = advancedPanel.getCurrentOpacity();
     advancedHeaderLabel.setAlpha(alpha);
     lookAheadComboBox.setAlpha(alpha);
@@ -1577,13 +1601,6 @@ void VocalRiderAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawHorizontalLine(static_cast<int>(bottomBounds.getY()), 0.0f, bounds.getWidth());
 
 #if MAGICRIDE_LITE
-    // LITE badge — small rounded rectangle behind the label
-    {
-        auto badgeBounds = liteBadgeLabel.getBounds().toFloat().expanded(2.0f, 1.0f);
-        g.setColour(CustomLookAndFeel::getAccentColour().withAlpha(0.6f));
-        g.fillRoundedRectangle(badgeBounds, 3.0f);
-    }
-
     // AUTO-TARGET badge background (pulsing rounded rect)
     if (autoTargetBadgeLabel.isVisible())
     {
@@ -1630,13 +1647,19 @@ void VocalRiderAudioProcessorEditor::resized()
     brandLabel.setBounds(-100, -100, 1, 1);
 
 #if MAGICRIDE_LITE
-    // LITE badge — positioned at top-right corner of the brand tab
-    liteBadgeLabel.setBounds(brandTab.getRight() - 46, brandTab.getY() + 4, 34, 14);
-    liteBadgeLabel.toFront(false);
+    // liteBadgeLabel no longer needed — "lite" is part of the SVG logo
+    liteBadgeLabel.setBounds(-100, -100, 1, 1);
 
-    // AUTO-TARGET badge — top-right area of the main UI
-    autoTargetBadgeLabel.setBounds(getWidth() - 120, headerHeight + 8, 100, 18);
-    autoTargetBadgeLabel.toFront(false);
+    // AUTO-TARGET badge — centered at top of waveform display
+    {
+        int badgeW = 130;
+        int badgeH = 22;
+        auto wfBounds = waveformDisplay.getBounds();
+        int badgeX = wfBounds.getCentreX() - badgeW / 2;
+        int badgeY = wfBounds.getY() + 10;
+        autoTargetBadgeLabel.setBounds(badgeX, badgeY, badgeW, badgeH);
+        autoTargetBadgeLabel.toFront(false);
+    }
 #endif
     
     // Right controls area (everything else)
@@ -2044,6 +2067,23 @@ void VocalRiderAudioProcessorEditor::timerCallback()
     }
 
 #if MAGICRIDE_LITE
+    // Auto-target: wait for audio before starting
+    if (liteAutoTargetArmed)
+    {
+        float inputDb = audioProcessor.getInputLevelDb();
+        if (inputDb > -50.0f)
+        {
+            liteAutoTargetArmed = false;
+            autoTargetButton.setToggleState(true, juce::dontSendNotification);
+            autoTargetButton.setPulsing(true);
+            learnCountdown = 90;
+            learnMinDb = 6.0f;
+            learnMaxDb = -100.0f;
+            learnSumDb = 0.0f;
+            learnSampleCount = 0;
+        }
+    }
+
     // Flashing AUTO-TARGET badge while learning is active
     {
         bool learning = autoTargetButton.getToggleState() && learnCountdown > 0;
@@ -2060,6 +2100,14 @@ void VocalRiderAudioProcessorEditor::timerCallback()
         {
             autoTargetBadgePhase = 0.0f;
         }
+    }
+
+    // Periodic upgrade pop-up
+    liteUpgradeTimerCount++;
+    if (liteUpgradeTimerCount >= liteUpgradePopupInterval && liteUpgradeOverlay == nullptr)
+    {
+        liteUpgradeTimerCount = 0;
+        showLiteUpgradeDialog();
     }
 #endif
     

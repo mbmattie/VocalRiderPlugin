@@ -267,10 +267,11 @@ void CustomLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int wi
     auto radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) / 2.0f * 0.92f;
     
     float angle = rotaryStartAngle + sliderPosProportional * (rotaryEndAngle - rotaryStartAngle);
-    auto accentColour = getAccentColour();  // Purple accent
+    bool isDisabled = !slider.isEnabled();
+    auto accentColour = isDisabled ? juce::Colour(0xFF3A3D48) : getAccentColour();
     
     // Check if mouse is over for hover effect
-    bool isHovered = slider.isMouseOver();
+    bool isHovered = !isDisabled && slider.isMouseOver();
     
     auto outerRadius = radius;
     auto knobRadius = outerRadius * 0.82f;  // Bigger inner knob (was 0.72)
@@ -356,8 +357,7 @@ void CustomLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int wi
     auto lineEndX = centreX + std::sin(angle) * lineEndDist;
     auto lineEndY = centreY - std::cos(angle) * lineEndDist;
     
-    // Subtle indicator line
-    g.setColour(accentColour.withAlpha(0.85f));
+    g.setColour(accentColour.withAlpha(isDisabled ? 0.5f : 0.85f));
     g.drawLine(lineStartX, lineStartY, lineEndX, lineEndY, 1.2f);
 }
 
@@ -368,8 +368,10 @@ void CustomLookAndFeel::drawLabel(juce::Graphics& g, juce::Label& label)
 
     if (!label.isBeingEdited())
     {
-        auto alpha = label.isEnabled() ? 1.0f : 0.5f;
-        g.setColour(label.findColour(juce::Label::textColourId).withMultipliedAlpha(alpha));
+        auto textColour = label.findColour(juce::Label::textColourId);
+        if (!label.isEnabled())
+            textColour = textColour.withMultipliedSaturation(0.3f).withMultipliedBrightness(0.5f);
+        g.setColour(textColour);
         g.setFont(getLabelFont(label));
         
         auto textArea = label.getBorderSize().subtractedFrom(label.getLocalBounds());

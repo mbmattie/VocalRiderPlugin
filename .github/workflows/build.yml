@@ -63,13 +63,17 @@ jobs:
       run: |
         SIGN_ID="Developer ID Application: MATTHEW STEVEN ERNST ($TEAM_ID)"
         
-        codesign --deep --force --verify --verbose \
-          --sign "$SIGN_ID" --options runtime \
-          build/VocalRider_artefacts/Release/AU/magic.RIDE.component
-        
-        codesign --deep --force --verify --verbose \
-          --sign "$SIGN_ID" --options runtime \
-          build/VocalRider_artefacts/Release/VST3/magic.RIDE.vst3
+        for plugin in \
+          build/VocalRider_artefacts/Release/AU/magic.RIDE.component \
+          build/VocalRider_artefacts/Release/VST3/magic.RIDE.vst3 \
+          build/VocalRiderLite_artefacts/Release/AU/magic.RIDE\ Lite.component \
+          build/VocalRiderLite_artefacts/Release/VST3/magic.RIDE\ Lite.vst3; do
+          if [ -e "$plugin" ]; then
+            codesign --deep --force --verify --verbose \
+              --sign "$SIGN_ID" --options runtime "$plugin"
+            codesign -dv --verbose=4 "$plugin"
+          fi
+        done
         
         if [ -d "build/VocalRider_artefacts/Release/AAX/magic.RIDE.aaxplugin" ]; then
           codesign --deep --force --verify --verbose \
@@ -77,104 +81,6 @@ jobs:
             build/VocalRider_artefacts/Release/AAX/magic.RIDE.aaxplugin
           echo "AAX Apple-codesigned (wraptool will re-sign later if available)."
         fi
-        
-        codesign -dv --verbose=4 build/VocalRider_artefacts/Release/AU/magic.RIDE.component
-        codesign -dv --verbose=4 build/VocalRider_artefacts/Release/VST3/magic.RIDE.vst3
-    
-    - name: Download Eden SDK (macOS)
-      env:
-        GH_TOKEN: ${{ secrets.BUILD_TOOLS_TOKEN }}
-      run: |
-        gh release download eden-sdk-mac-v5.10.4 \
-          --repo mbmattie/build-tools \
-          --pattern "*.dmg" \
-          --dir $RUNNER_TEMP/eden
-      continue-on-error: true
-    
-    - name: Install Eden SDK (macOS)
-      run: |
-        DMG_FILE=$(ls $RUNNER_TEMP/eden/*.dmg 2>/dev/null | head -1)
-        if [ -z "$DMG_FILE" ]; then
-          echo "Eden SDK DMG not found. AAX PACE signing will be skipped."
-          exit 0
-        fi
-        
-        echo "Installing Eden SDK from $DMG_FILE"
-        hdiutil attach "$DMG_FILE"
-        edenVol=$(ls /Volumes | grep -i eden | head -1)
-        if [ -n "$edenVol" ]; then
-          PKG_FILE=$(find "/Volumes/$edenVol" -name "*.pkg" -maxdepth 1 | head -1)
-          if [ -n "$PKG_FILE" ]; then
-            sudo installer -pkg "$PKG_FILE" -target LocalSystem
-            echo "Eden SDK installed."
-          else
-            echo "No .pkg found in DMG. Listing contents:"
-            ls "/Volumes/$edenVol"
-          fi
-          hdiutil detach "/Volumes/$edenVol" || true
-        fi
-        
-        # Verify tools are available
-        if [ -f "/Applications/PACEAntiPiracy/Eden/Fusion/Versions/5/bin/wraptool" ]; then
-          echo "wraptool found."
-        else
-          echo "WARNING: wraptool not found after install."
-        fi
-        which iloktool 2>/dev/null && echo "iloktool found." || echo "WARNING: iloktool not found."
-      continue-on-error: true
-    
-    - name: Sign macOS AAX (PACE Cloud Signing)
-      env:
-        ILOK_USERNAME: ${{ secrets.ILOK_USERNAME }}
-        ILOK_PASSWORD: ${{ secrets.ILOK_PASSWORD }}
-        PACE_CUSTOMER_NUMBER: ${{ secrets.PACE_CUSTOMER_NUMBER }}
-        TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      run: |
-        WRAPTOOL="/Applications/PACEAntiPiracy/Eden/Fusion/Versions/5/bin/wraptool"
-        AAX_IN="build/VocalRider_artefacts/Release/AAX/magic.RIDE.aaxplugin"
-        AAX_OUT="build/VocalRider_artefacts/Release/AAX/magic.RIDE_signed.aaxplugin"
-        
-        if [ ! -f "$WRAPTOOL" ]; then
-          echo "wraptool not found. Skipping AAX signing."
-          exit 0
-        fi
-        
-        if [ -z "$ILOK_USERNAME" ] || [ -z "$ILOK_PASSWORD" ]; then
-          echo "iLok credentials not configured. Skipping AAX signing."
-          exit 0
-        fi
-        
-        echo "Opening iLok cloud session..."
-        iloktool cloud --open --account "$ILOK_USERNAME" --password "$ILOK_PASSWORD" -v || {
-          echo "WARNING: Failed to open iLok cloud session. Skipping AAX signing."
-          exit 0
-        }
-        
-        echo "Signing AAX plugin..."
-        $WRAPTOOL sign --verbose \
-          --account "$ILOK_USERNAME" \
-          --signid "Developer ID Application: MATTHEW STEVEN ERNST ($TEAM_ID)" \
-          --customernumber "$PACE_CUSTOMER_NUMBER" \
-          --customername "MBM Audio" \
-          --productname "magic.RIDE" \
-          --allowsigningservice \
-          --dsig1-compat off \
-          --in "$AAX_IN" \
-          --out "$AAX_OUT"
-        
-        if [ $? -eq 0 ]; then
-          $WRAPTOOL verify --verbose --in "$AAX_OUT"
-          rm -rf "$AAX_IN"
-          ditto "$AAX_OUT" "$AAX_IN"
-          rm -rf "$AAX_OUT"
-          echo "AAX plugin signed successfully!"
-        else
-          echo "WARNING: AAX signing failed."
-        fi
-        
-        echo "Closing iLok cloud session..."
-        iloktool cloud --close -v || true
-      continue-on-error: true
     
     - name: Build Installer
       run: |
@@ -224,11 +130,65 @@ jobs:
         xcrun stapler staple installer/output/magic.RIDE-${{ env.VERSION }}-Installer.pkg
         xcrun stapler validate installer/output/magic.RIDE-${{ env.VERSION }}-Installer.pkg
     
+    - name: Build Lite Installer
+      run: |
+        cd installer
+        chmod +x build_installer_lite.sh
+        ./build_installer_lite.sh
+    
+    - name: Sign Lite Installer
+      env:
+        TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      run: |
+        productsign --sign "Developer ID Installer: MATTHEW STEVEN ERNST ($TEAM_ID)" \
+          "installer/output/magic.RIDE Lite-${{ env.VERSION }}-Installer.pkg" \
+          "installer/output/magic.RIDE Lite-${{ env.VERSION }}-Installer-signed.pkg"
+        
+        mv "installer/output/magic.RIDE Lite-${{ env.VERSION }}-Installer-signed.pkg" \
+           "installer/output/magic.RIDE Lite-${{ env.VERSION }}-Installer.pkg"
+    
+    - name: Notarize Lite Installer
+      env:
+        APPLE_ID: ${{ secrets.APPLE_ID }}
+        APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      run: |
+        SUBMIT_OUT=$(xcrun notarytool submit "installer/output/magic.RIDE Lite-${{ env.VERSION }}-Installer.pkg" \
+          --apple-id "$APPLE_ID" \
+          --team-id "$TEAM_ID" \
+          --password "$APPLE_APP_PASSWORD" \
+          --wait 2>&1) || true
+        
+        echo "$SUBMIT_OUT"
+        
+        SUBMISSION_ID=$(echo "$SUBMIT_OUT" | grep "id:" | head -1 | awk '{print $2}')
+        STATUS=$(echo "$SUBMIT_OUT" | grep "status:" | tail -1 | awk '{print $2}')
+        
+        if [ "$STATUS" = "Invalid" ] || [ "$STATUS" = "Rejected" ]; then
+          echo "=== Notarization FAILED. Fetching detailed log... ==="
+          xcrun notarytool log "$SUBMISSION_ID" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            notarization-lite-log.json || true
+          cat notarization-lite-log.json 2>/dev/null || true
+          exit 1
+        fi
+        
+        xcrun stapler staple "installer/output/magic.RIDE Lite-${{ env.VERSION }}-Installer.pkg"
+        xcrun stapler validate "installer/output/magic.RIDE Lite-${{ env.VERSION }}-Installer.pkg"
+    
     - name: Upload macOS Installer (Signed & Notarized)
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-macOS-Installer
-        path: installer/output/*.pkg
+        path: installer/output/magic.RIDE-${{ env.VERSION }}-Installer.pkg
+    
+    - name: Upload macOS Lite Installer (Signed & Notarized)
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PLUGIN_NAME }}-Lite-${{ env.VERSION }}-macOS-Installer
+        path: installer/output/magic.RIDE Lite-${{ env.VERSION }}-Installer.pkg
     
     - name: Upload macOS AU (Signed)
       uses: actions/upload-artifact@v4
@@ -242,11 +202,29 @@ jobs:
         name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-macOS-VST3
         path: build/VocalRider_artefacts/Release/VST3/*.vst3
     
-    - name: Upload macOS AAX
+    - name: Upload macOS AAX (Unsigned)
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-macOS-AAX
+        name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-macOS-AAX-Unsigned
         path: build/VocalRider_artefacts/Release/AAX/*.aaxplugin
+    
+    - name: Upload macOS Lite AU (Signed)
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PLUGIN_NAME }}-Lite-${{ env.VERSION }}-macOS-AU
+        path: build/VocalRiderLite_artefacts/Release/AU/*.component
+    
+    - name: Upload macOS Lite VST3 (Signed)
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PLUGIN_NAME }}-Lite-${{ env.VERSION }}-macOS-VST3
+        path: build/VocalRiderLite_artefacts/Release/VST3/*.vst3
+    
+    - name: Upload macOS Lite Standalone
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PLUGIN_NAME }}-Lite-${{ env.VERSION }}-macOS-Standalone
+        path: build/VocalRiderLite_artefacts/Release/Standalone/*.app
     
     - name: Cleanup Keychain
       if: always()
@@ -274,173 +252,6 @@ jobs:
         dir build\VocalRider_artefacts\Release\VST3\ /s
       shell: cmd
     
-    - name: Download & Install Eden SDK (Windows)
-      env:
-        GH_TOKEN: ${{ secrets.BUILD_TOOLS_TOKEN }}
-      run: |
-        Write-Host "Downloading Eden SDK from build-tools repo..."
-        New-Item -ItemType Directory -Path "$env:RUNNER_TEMP\eden" -Force | Out-Null
-        
-        gh release download eden-sdk-v5.10.4 `
-          --repo mbmattie/build-tools `
-          --pattern "*.exe" `
-          --dir "$env:RUNNER_TEMP\eden"
-        
-        if ($LASTEXITCODE -ne 0) {
-          Write-Host "ERROR: Failed to download Eden SDK. Check that BUILD_TOOLS_TOKEN secret is set and has repo scope."
-          Write-Host "AAX signing will be skipped."
-          exit 0
-        }
-        
-        $installer = Get-ChildItem -Path "$env:RUNNER_TEMP\eden" -Filter "*.exe" | Select-Object -First 1
-        if (-not $installer) {
-          Write-Host "Eden SDK installer not found. AAX signing will be skipped."
-          exit 0
-        }
-        
-        Write-Host "Installer: $($installer.FullName)"
-        Write-Host "Installer size: $([math]::Round($installer.Length / 1MB, 1)) MB"
-        
-        # Extract installer contents with 7-Zip (works on most Windows installers)
-        $extractDir = "$env:RUNNER_TEMP\eden-extracted"
-        Write-Host "=== Extracting installer with 7-Zip ==="
-        & "C:\Program Files\7-Zip\7z.exe" x "$($installer.FullName)" "-o$extractDir" -y
-        Write-Host "7-Zip exit code: $LASTEXITCODE"
-        
-        # Show top-level extracted contents
-        if (Test-Path $extractDir) {
-          Write-Host "=== Extracted contents (top 3 levels) ==="
-          Get-ChildItem -Path $extractDir -Recurse -Depth 3 -ErrorAction SilentlyContinue | ForEach-Object {
-            Write-Host "  $($_.FullName)"
-          }
-          
-          # Search extracted contents for wraptool
-          $wraptool = Get-ChildItem -Path $extractDir -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          $iloktool = Get-ChildItem -Path $extractDir -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          
-          if ($wraptool) {
-            Write-Host "FOUND wraptool in extracted contents: $($wraptool.FullName)"
-            # If there are nested archives (MSI, CAB), we may need a second extraction pass
-          } else {
-            Write-Host "wraptool not in top-level extract. Checking for nested MSI/CAB files..."
-            $msiFiles = Get-ChildItem -Path $extractDir -Include "*.msi","*.cab" -Recurse -ErrorAction SilentlyContinue
-            foreach ($msi in $msiFiles) {
-              Write-Host "Found nested archive: $($msi.FullName)"
-              $nestedDir = "$extractDir\nested_$($msi.BaseName)"
-              & "C:\Program Files\7-Zip\7z.exe" x "$($msi.FullName)" "-o$nestedDir" -y 2>$null
-              $wraptool = Get-ChildItem -Path $nestedDir -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-              if ($wraptool) {
-                Write-Host "FOUND wraptool in nested archive: $($wraptool.FullName)"
-                break
-              }
-            }
-          }
-          
-          $iloktool = Get-ChildItem -Path $extractDir -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          
-          if ($wraptool) {
-            # Copy tools to a known location
-            $toolsDir = "C:\PACETools"
-            New-Item -ItemType Directory -Path $toolsDir -Force | Out-Null
-            Copy-Item $wraptool.FullName "$toolsDir\wraptool.exe"
-            if ($iloktool) { Copy-Item $iloktool.FullName "$toolsDir\iloktool.exe" }
-            
-            # Also copy any DLLs from the same directory (wraptool may need them)
-            $wraptoolDir = $wraptool.Directory.FullName
-            Get-ChildItem -Path $wraptoolDir -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
-              Copy-Item $_.FullName "$toolsDir\"
-              Write-Host "Copied dependency: $($_.Name)"
-            }
-            Write-Host "PACE tools staged to $toolsDir"
-          } else {
-            Write-Host "ERROR: wraptool not found in extracted contents."
-          }
-        } else {
-          Write-Host "ERROR: 7-Zip extraction produced no output."
-        }
-      shell: pwsh
-      continue-on-error: true
-    
-    - name: Sign Windows AAX (PACE Cloud Signing)
-      env:
-        ILOK_USERNAME: ${{ secrets.ILOK_USERNAME }}
-        ILOK_PASSWORD: ${{ secrets.ILOK_PASSWORD }}
-        PACE_CUSTOMER_NUMBER: ${{ secrets.PACE_CUSTOMER_NUMBER }}
-      run: |
-        $AAX_IN = "build\VocalRider_artefacts\Release\AAX\magic.RIDE.aaxplugin"
-        
-        if (-not $env:ILOK_USERNAME -or -not $env:ILOK_PASSWORD) {
-          Write-Host "iLok credentials not configured. Skipping AAX signing."
-          exit 0
-        }
-        
-        if (-not (Test-Path $AAX_IN)) {
-          Write-Host "AAX plugin not found. Skipping AAX signing."
-          exit 0
-        }
-        
-        # Find wraptool and iloktool (check extracted tools location first, then Program Files)
-        $wraptool = $null
-        $iloktool = $null
-        if (Test-Path "C:\PACETools\wraptool.exe") {
-          $wraptool = Get-Item "C:\PACETools\wraptool.exe"
-          Write-Host "Using extracted wraptool: $($wraptool.FullName)"
-        }
-        if (Test-Path "C:\PACETools\iloktool.exe") {
-          $iloktool = Get-Item "C:\PACETools\iloktool.exe"
-        }
-        if (-not $wraptool) {
-          $wraptool = Get-ChildItem -Path "C:\Program Files","C:\Program Files (x86)" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          $iloktool = Get-ChildItem -Path "C:\Program Files","C:\Program Files (x86)" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-        }
-        
-        if (-not $wraptool) {
-          Write-Host "wraptool not found. Skipping AAX signing."
-          exit 0
-        }
-        
-        Write-Host "Found wraptool: $($wraptool.FullName)"
-        
-        # Open iLok cloud session
-        if ($iloktool) {
-          Write-Host "Opening iLok cloud session..."
-          & $iloktool.FullName cloud --open --account $env:ILOK_USERNAME --password $env:ILOK_PASSWORD -v
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "WARNING: Failed to open iLok cloud session. Skipping AAX signing."
-            exit 0
-          }
-        }
-        
-        # Sign the AAX plugin
-        Write-Host "Signing AAX plugin..."
-        & $wraptool.FullName sign --verbose `
-          --account $env:ILOK_USERNAME `
-          --customernumber $env:PACE_CUSTOMER_NUMBER `
-          --customername "MBM Audio" `
-          --productname "magic.RIDE" `
-          --allowsigningservice `
-          --dsig1-compat off `
-          --in $AAX_IN `
-          --out "${AAX_IN}_signed"
-        
-        if ($LASTEXITCODE -eq 0) {
-          Remove-Item -Recurse -Force $AAX_IN
-          Rename-Item "${AAX_IN}_signed" $AAX_IN
-          Write-Host "AAX plugin signed successfully!"
-          
-          & $wraptool.FullName verify --verbose --in $AAX_IN
-        } else {
-          Write-Host "WARNING: AAX signing failed."
-        }
-        
-        # Close iLok cloud session
-        if ($iloktool) {
-          Write-Host "Closing iLok cloud session..."
-          & $iloktool.FullName cloud --close -v
-        }
-      shell: pwsh
-      continue-on-error: true
-    
     - name: Create installer output directory
       run: mkdir -p installer\output
       shell: pwsh
@@ -450,11 +261,22 @@ jobs:
         & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\windows\magic.RIDE.iss
       shell: pwsh
     
+    - name: Build Windows Lite Installer
+      run: |
+        & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "installer\windows\magic.RIDE Lite.iss"
+      shell: pwsh
+    
     - name: Upload Windows Installer
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-Windows-Installer
-        path: installer/output/*-Windows-Setup.exe
+        path: installer/output/magic.RIDE-${{ env.VERSION }}-Windows-Setup.exe
+    
+    - name: Upload Windows Lite Installer
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PLUGIN_NAME }}-Lite-${{ env.VERSION }}-Windows-Installer
+        path: installer/output/magic.RIDE Lite-${{ env.VERSION }}-Windows-Setup.exe
     
     - name: Upload Windows VST3
       uses: actions/upload-artifact@v4
@@ -462,11 +284,29 @@ jobs:
         name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-Windows-VST3
         path: build/VocalRider_artefacts/Release/VST3/*.vst3
     
+    - name: Upload Windows AAX (Unsigned)
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-Windows-AAX-Unsigned
+        path: build/VocalRider_artefacts/Release/AAX/*.aaxplugin
+    
     - name: Upload Windows Standalone
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.PLUGIN_NAME }}-${{ env.VERSION }}-Windows-Standalone
         path: build/VocalRider_artefacts/Release/Standalone/*.exe
+    
+    - name: Upload Windows Lite VST3
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PLUGIN_NAME }}-Lite-${{ env.VERSION }}-Windows-VST3
+        path: build/VocalRiderLite_artefacts/Release/VST3/*.vst3
+    
+    - name: Upload Windows Lite Standalone
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PLUGIN_NAME }}-Lite-${{ env.VERSION }}-Windows-Standalone
+        path: build/VocalRiderLite_artefacts/Release/Standalone/*.exe
 
   release:
     needs: [build-macos, build-windows]
