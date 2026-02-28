@@ -390,8 +390,18 @@ jobs:
         ILOK_USERNAME: ${{ secrets.ILOK_USERNAME }}
         ILOK_PASSWORD: ${{ secrets.ILOK_PASSWORD }}
         PACE_CUSTOMER_NUMBER: ${{ secrets.PACE_CUSTOMER_NUMBER }}
+        WIN_CERT_PFX_BASE64: ${{ secrets.WIN_CERT_PFX_BASE64 }}
+        WIN_CERT_PFX_PASSWORD: ${{ secrets.WIN_CERT_PFX_PASSWORD }}
       shell: pwsh
       run: |
+        if (-not $env:WIN_CERT_PFX_BASE64) {
+          Write-Host "WIN_CERT_PFX_BASE64 not set — skipping AAX wrapping (requires OV cert)"
+          exit 0
+        }
+
+        $pfxPath = "$env:RUNNER_TEMP\codesign.pfx"
+        [System.IO.File]::WriteAllBytes($pfxPath, [System.Convert]::FromBase64String($env:WIN_CERT_PFX_BASE64))
+
         $WRAPTOOL = (Get-ChildItem "C:\Program Files (x86)","C:\Program Files" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
         $ILOKTOOL = (Get-ChildItem "C:\Program Files (x86)","C:\Program Files" -Filter "iloktool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
 
@@ -408,16 +418,19 @@ jobs:
         $AAX_IN  = "$AAX_DIR\magic.RIDE.aaxplugin"
         $AAX_OUT = "$env:RUNNER_TEMP\magic.RIDE.aaxplugin"
 
-        & $WRAPTOOL sign --verbose `
-          --account $env:ILOK_USERNAME `
-          --customernumber $env:PACE_CUSTOMER_NUMBER `
-          --customername "MBM Audio" `
-          --productname "magic.RIDE" `
-          --allowsigningservice `
-          --in $AAX_IN `
-          --out $AAX_OUT
+        $wrapCmd = "sign --verbose" + `
+          " --account `"$($env:ILOK_USERNAME)`"" + `
+          " --customernumber `"$($env:PACE_CUSTOMER_NUMBER)`"" + `
+          " --customername `"MBM Audio`"" + `
+          " --productname `"magic.RIDE`"" + `
+          " --allowsigningservice" + `
+          " --keyfile `"$pfxPath`"" + `
+          " --keypassword `"$($env:WIN_CERT_PFX_PASSWORD)`"" + `
+          " --in `"$AAX_IN`"" + `
+          " --out `"$AAX_OUT`""
 
-        if ($LASTEXITCODE -ne 0) { Write-Error "wraptool sign failed"; exit 1 }
+        $proc = Start-Process -FilePath $WRAPTOOL -ArgumentList $wrapCmd -Wait -PassThru -NoNewWindow
+        if ($proc.ExitCode -ne 0) { Write-Error "wraptool sign failed with exit code $($proc.ExitCode)"; exit 1 }
 
         & $WRAPTOOL verify --verbose --in $AAX_OUT
 

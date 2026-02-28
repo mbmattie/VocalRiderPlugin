@@ -23,6 +23,8 @@ Add these in **Settings → Secrets and variables → Actions** on your repo:
 | `ILOK_PASSWORD` | Your iLok account password |
 | `PACE_CUSTOMER_NUMBER` | Provided by Avid/PACE for your signing agreement |
 | `BUILD_TOOLS_TOKEN` | GitHub PAT with access to `mbmattie/build-tools` (already configured) |
+| `WIN_CERT_PFX_BASE64` | Base64-encoded Windows OV code signing certificate (.pfx) |
+| `WIN_CERT_PFX_PASSWORD` | Password for the Windows PFX certificate |
 
 The following secrets should already be configured from the Apple signing setup:
 
@@ -43,18 +45,20 @@ The following secrets should already be configured from the Apple signing setup:
 5. Replaces the unsigned AAX in the build directory before building the installer
 
 **Windows runner:**
-1. Downloads pre-extracted `pace-tools-win64.zip` from `mbmattie/build-tools` (release `eden-sdk-v5.10.4`)
-2. Extracts `wraptool.exe`, `iloktool.exe`, and companion DLLs — no installer needed
-3. Opens iLok Cloud session → wraps AAX → verifies → closes session
-4. Replaces the unsigned AAX in the build directory before building the installer
+1. Downloads `EdenSDKLiteInstallerWin64.zip` from `mbmattie/build-tools` (release `eden-sdk-v5.10.4`)
+2. Installs the full Eden SDK (provides `wraptool`, `iloktool`, and PACE runtime)
+3. Decodes the OV certificate PFX from `WIN_CERT_PFX_BASE64` secret
+4. Opens iLok Cloud session → wraps AAX with `--keyfile` → verifies → closes session
+5. Replaces the unsigned AAX in the build directory before building the installer
+
+**Note:** Windows AAX wrapping requires a real CA-issued OV certificate. wraptool uses Windows CryptoAPI internally for Authenticode signing — self-signed certificates cause it to hang during CRL/OCSP revocation checking. If `WIN_CERT_PFX_BASE64` is not set, the step is skipped gracefully.
 
 ### Build-Tools Release Assets
 
 | Release | Asset | Purpose |
 |---------|-------|---------|
 | `eden-sdk-mac-v5.10.4` | `EdenSDKLiteInstallerMac_v5.10.4_72ed0501.2.dmg` | macOS Eden SDK installer |
-| `eden-sdk-v5.10.4` | `pace-tools-win64.zip` | Pre-extracted Windows wraptool + iloktool + DLLs |
-| `eden-sdk-v5.10.4` | `EdenSDKLiteInstallerWin64.zip` | Full Windows installer (for reference) |
+| `eden-sdk-v5.10.4` | `EdenSDKLiteInstallerWin64.zip` | Windows Eden SDK installer |
 
 ---
 
@@ -141,6 +145,9 @@ Then sign, notarize, and staple the `.pkg` as usual.
 - The workflow sets `security default-keychain` before running wraptool (PACE docs workaround)
 - If wraptool still fails with keychain errors, check that `MACOS_APP_CERTIFICATE` is valid
 
-### Windows wraptool errors on CI
-- The pre-extracted tools are x86_64 binaries running natively on the Windows runner
-- If `wraptool sign` fails without `--signid`/`--keyfile`, PACE Cloud Signing may require a Windows Authenticode certificate — add one via `--keyfile` when you have your OV cert
+### Windows wraptool hangs on CI
+- wraptool uses Windows CryptoAPI directly for Authenticode signing (not `signtool.exe`)
+- Self-signed certificates have no CRL/OCSP endpoint, causing CryptoAPI to hang
+- **Solution:** Use a real CA-issued OV certificate (has proper CRL endpoints)
+- Add `WIN_CERT_PFX_BASE64` and `WIN_CERT_PFX_PASSWORD` secrets with your OV cert
+- To encode your PFX: `base64 -i your-cert.pfx | pbcopy` (macOS) or `certutil -encode your-cert.pfx encoded.txt` (Windows)

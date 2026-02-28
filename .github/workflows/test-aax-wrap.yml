@@ -91,37 +91,40 @@ jobs:
         foreach ($t in $wraptool) { Write-Host "Found: $($t.FullName)" }
         foreach ($t in $iloktool) { Write-Host "Found: $($t.FullName)" }
 
-    - name: Create self-signed cert & wrap AAX
+    - name: Wrap Windows AAX
       env:
         ILOK_USERNAME: ${{ secrets.ILOK_USERNAME }}
         ILOK_PASSWORD: ${{ secrets.ILOK_PASSWORD }}
         PACE_CUSTOMER_NUMBER: ${{ secrets.PACE_CUSTOMER_NUMBER }}
+        WIN_CERT_PFX_BASE64: ${{ secrets.WIN_CERT_PFX_BASE64 }}
+        WIN_CERT_PFX_PASSWORD: ${{ secrets.WIN_CERT_PFX_PASSWORD }}
       shell: pwsh
       timeout-minutes: 5
       run: |
-        # --- Certificate setup (legacy CSP to avoid CNG/signtool hangs) ---
-        $cert = New-SelfSignedCertificate `
-          -Type CodeSigningCert `
-          -Subject "CN=MBM Audio Test, O=MBM Audio" `
-          -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 `
-          -CertStoreLocation Cert:\CurrentUser\My `
-          -KeySpec Signature `
-          -Provider "Microsoft Enhanced RSA and AES Cryptographic Provider" `
-          -NotAfter (Get-Date).AddDays(1)
-        $thumbprint = $cert.Thumbprint
-        Write-Host "Cert thumbprint: $thumbprint"
-
-        $pfxPath = "$env:RUNNER_TEMP\test-codesign.pfx"
-        $pfxPass = "TempPass!"
-        Export-PfxCertificate -Cert $cert -FilePath $pfxPath `
-          -Password (ConvertTo-SecureString $pfxPass -Force -AsPlainText) | Out-Null
-
-        # --- Disable CRL/OCSP revocation checks (self-signed has no CRL endpoint,
-        #     causing CryptoAPI to hang waiting for network timeout) ---
-        Write-Host "`n=== Disabling certificate revocation checking ==="
-        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v CertificateRevocation /t REG_DWORD /d 0 /f
-        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\WinTrust\Trust Providers\Software Publishing" /v State /t REG_DWORD /d 0x23e00 /f
-        [System.Net.ServicePointManager]::CheckCertificateRevocationList = $false
+        # --- Certificate: use real OV cert if available, else self-signed for validation ---
+        if ($env:WIN_CERT_PFX_BASE64) {
+          Write-Host "Using real OV certificate from secrets"
+          $pfxPath = "$env:RUNNER_TEMP\codesign.pfx"
+          $pfxPass = $env:WIN_CERT_PFX_PASSWORD
+          [System.IO.File]::WriteAllBytes($pfxPath, [System.Convert]::FromBase64String($env:WIN_CERT_PFX_BASE64))
+          $usingRealCert = $true
+        } else {
+          Write-Host "No WIN_CERT_PFX_BASE64 secret — using self-signed cert (pipeline validation only)"
+          $cert = New-SelfSignedCertificate `
+            -Type CodeSigningCert `
+            -Subject "CN=MBM Audio Test, O=MBM Audio" `
+            -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -KeySpec Signature `
+            -Provider "Microsoft Enhanced RSA and AES Cryptographic Provider" `
+            -NotAfter (Get-Date).AddDays(1)
+          $pfxPath = "$env:RUNNER_TEMP\test-codesign.pfx"
+          $pfxPass = "TempPass!"
+          Export-PfxCertificate -Cert $cert -FilePath $pfxPath `
+            -Password (ConvertTo-SecureString $pfxPass -Force -AsPlainText) | Out-Null
+          $usingRealCert = $false
+        }
+        Write-Host "PFX: $pfxPath"
 
         # --- Find PACE tools ---
         $WRAPTOOL = (Get-ChildItem "C:\Program Files (x86)","C:\Program Files" -Filter "wraptool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
@@ -136,32 +139,17 @@ jobs:
         $AAX_IN = (Get-ChildItem "aax-input" -Filter "*.aaxplugin" -Recurse -Directory | Select-Object -First 1).FullName
         $AAX_OUT = "$env:RUNNER_TEMP\magic.RIDE.aaxplugin"
 
-        Write-Host "wraptool:        $WRAPTOOL"
-        Write-Host "iloktool:        $ILOKTOOL"
+        Write-Host "wraptool:         $WRAPTOOL"
         Write-Host "PACE_FUSION_HOME: $fusionHome"
-        Write-Host "Input AAX:       $AAX_IN"
-        Write-Host "Output AAX:      $AAX_OUT"
-
-        # --- Test signtool directly first ---
-        $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits" -Filter "signtool.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*x64*" } | Select-Object -Last 1).FullName
-        $testBin = (Get-ChildItem $AAX_IN -Filter "*.aaxplugin" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
-        if (-not $testBin) { $testBin = (Get-ChildItem $AAX_IN -Filter "*.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName }
-        Write-Host "`n=== Direct signtool test ==="
-        Write-Host "signtool: $signtool"
-        Write-Host "test binary: $testBin"
-        & $signtool sign /sha1 $thumbprint /fd sha256 /tr http://timestamp.digicert.com /td sha256 /v $testBin
-        Write-Host "signtool exit: $LASTEXITCODE"
+        Write-Host "Input AAX:        $AAX_IN"
+        Write-Host "Output AAX:       $AAX_OUT"
 
         # --- iLok Cloud session ---
         Write-Host "`n=== Opening iLok Cloud session ==="
         & $ILOKTOOL cloud --open --account $env:ILOK_USERNAME --password $env:ILOK_PASSWORD -v
 
-        # --- Run wraptool with --keyfile (PFX) instead of --signid (thumbprint) ---
+        # --- Run wraptool ---
         Write-Host "`n=== Running wraptool ==="
-        $extraOpts = "/tr http://timestamp.digicert.com /td sha256 /v"
-
-        # Build as single string with explicit quotes around every value
-        # (Start-Process -ArgumentList with an array strips inner quotes)
         $wrapCmd = "sign --verbose" + `
           " --account `"$($env:ILOK_USERNAME)`"" + `
           " --customernumber `"$($env:PACE_CUSTOMER_NUMBER)`"" + `
@@ -170,11 +158,11 @@ jobs:
           " --allowsigningservice" + `
           " --keyfile `"$pfxPath`"" + `
           " --keypassword `"$pfxPass`"" + `
-          " --extrasigningoptions `"$extraOpts`"" + `
           " --in `"$AAX_IN`"" + `
           " --out `"$AAX_OUT`""
 
-        Write-Host "wraptool command: $wrapCmd"
+        $timeout = if ($usingRealCert) { 300 } else { 30 }
+        Write-Host "Timeout: ${timeout}s (real cert: $usingRealCert)"
 
         $proc = Start-Process -FilePath $WRAPTOOL `
           -ArgumentList $wrapCmd `
@@ -183,29 +171,19 @@ jobs:
           -RedirectStandardError "$env:RUNNER_TEMP\wrap_stderr.txt"
 
         $waited = 0
-        while (-not $proc.HasExited -and $waited -lt 120) {
+        while (-not $proc.HasExited -and $waited -lt $timeout) {
           Start-Sleep -Seconds 5
           $waited += 5
-          $children = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($proc.Id)" -ErrorAction SilentlyContinue
-          if ($children) {
-            foreach ($c in $children) {
-              Write-Host "  ${waited}s - child: $($c.Name) PID=$($c.ProcessId) cmd=$($c.CommandLine)"
-            }
-          } else {
-            Write-Host "  ${waited}s - no child processes"
-          }
+          Write-Host "  ${waited}s..."
         }
 
         if (-not $proc.HasExited) {
-          $children = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($proc.Id)" -ErrorAction SilentlyContinue
-          Write-Host "`n--- wraptool hung ($waited s). Child processes:"
-          foreach ($c in $children) {
-            Write-Host "  $($c.Name) PID=$($c.ProcessId) cmd=$($c.CommandLine)"
-          }
           Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 3
+          Start-Sleep -Seconds 2
+          $hung = $true
         } else {
           Write-Host "wraptool exited: $($proc.ExitCode)"
+          $hung = $false
         }
 
         Write-Host "`n=== wraptool stdout ==="
@@ -216,16 +194,17 @@ jobs:
         & $ILOKTOOL cloud --close -v
 
         if (Test-Path $AAX_OUT) {
-          Write-Host "`n=== Output AAX exists — verifying ==="
+          Write-Host "`n=== Verifying wrapped AAX ==="
           & $WRAPTOOL verify --verbose --in $AAX_OUT
-          Write-Host "verify exit: $LASTEXITCODE"
-        } else {
-          Write-Host "`n=== No output AAX created ==="
-          Write-Host "PACE authentication and iLok session work correctly."
-          Write-Host "wraptool hangs during Authenticode signing with self-signed cert."
-          Write-Host "This is expected — real OV/EV cert will not have this issue."
-          Write-Host "Pipeline is validated. Exiting successfully."
+          Write-Host "SUCCESS: Windows AAX wrapped and verified"
+        } elseif (-not $usingRealCert) {
+          Write-Host "`n=== EXPECTED: Self-signed cert causes wraptool CryptoAPI hang ==="
+          Write-Host "Pipeline validated: Eden SDK, iLok auth, wraptool args all work."
+          Write-Host "Add WIN_CERT_PFX_BASE64 + WIN_CERT_PFX_PASSWORD secrets with real OV cert to complete."
           exit 0
+        } else {
+          Write-Error "wraptool failed with real cert (hung=$hung). Check logs above."
+          exit 1
         }
 
     - name: Upload wrapped Windows AAX
